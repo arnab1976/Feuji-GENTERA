@@ -1,0 +1,57 @@
+# Template for ephemeral Terraform execution Jobs (Stage 5).
+# One Job per tenant per run. Container destroyed after completion.
+# Credentials injected from Azure Key Vault / AWS Secrets Manager — never hardcoded.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "tf-run-TENANT_ID-JOB_ID"   # substituted at runtime by JumpBoxService
+  namespace: tf-execution
+  labels:
+    app: terraform-executor
+    tenant-id: "TENANT_ID"
+spec:
+  ttlSecondsAfterFinished: 60        # auto-delete Job after 60s
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: terraform-executor-sa   # IRSA / Workload Identity
+      containers:
+        - name: terraform
+          image: hashicorp/terraform:1.8
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "[1] Fetching HCL artifact from S3..."
+              aws s3 cp s3://${TF_ARTIFACTS_BUCKET}/${S3_KEY} /workspace/ --recursive
+              echo "[2] terraform init"
+              cd /workspace && terraform init -backend-config="key=tenants/${TENANT_ID}/prod.tfstate"
+              echo "[3] terraform plan"
+              terraform plan -out=tfplan
+              echo "[4] terraform apply"
+              terraform apply -auto-approve tfplan
+              echo "[5] Saving outputs.json to S3"
+              terraform output -json > /tmp/outputs.json
+              aws s3 cp /tmp/outputs.json s3://${TF_ARTIFACTS_BUCKET}/tenants/${TENANT_ID}/outputs.json
+              echo "[DONE] Container completing — credentials purged on exit"
+          env:
+            - name: TENANT_ID
+              value: "TENANT_ID"
+            - name: S3_KEY
+              value: "S3_KEY"
+            - name: TF_ARTIFACTS_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: feuji-tf-secrets
+                  key: artifacts-bucket
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000

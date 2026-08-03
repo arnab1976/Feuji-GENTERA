@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: feuji-llm-kit
+  labels:
+    app: feuji-llm-kit
+---
+# tf-execution namespace — Jump Box jobs run here (Stage 5)
+# One ephemeral Job per tenant per terraform apply
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tf-execution
+  labels:
+    app: feuji-terraform-executor

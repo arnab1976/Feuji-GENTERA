@@ -1,0 +1,100 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: feuji_postgres
+    environment:
+      POSTGRES_USER: feuji
+      POSTGRES_PASSWORD: feuji_pass
+      POSTGRES_DB: llmkit
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U feuji -d llmkit"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: feuji_redis
+    ports:
+      - "6381:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── Backend (FastAPI) ──────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: feuji_backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://feuji:feuji_pass@postgres:5432/llmkit
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./backend:/app
+      - tf_workspace:/tmp/tf_workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8050 --reload
+
+  # ── Frontend (React) ───────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: feuji_frontend
+    ports:
+      - "3050:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_API_BASE_URL: http://localhost:8050
+      VITE_WS_BASE_URL: ws://localhost:8050
+      VITE_PROXY_TARGET: http://backend:8050
+    depends_on:
+      - backend
+
+  # ── Celery Worker (async tasks) ────────────────────────────────────────────
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: feuji_celery
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://feuji:feuji_pass@postgres:5432/llmkit
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+      - tf_workspace:/tmp/tf_workspace
+    depends_on:
+      - redis
+      - postgres
+    command: celery -A app.worker worker --loglevel=info --concurrency=4
+
+volumes:
+  postgres_data:
+  redis_data:
+  tf_workspace:
