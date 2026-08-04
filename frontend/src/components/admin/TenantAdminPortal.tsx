@@ -179,16 +179,121 @@ export default function TenantAdminPortal() {
 
   return (
     <div style={{ minHeight: 420, display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1120 }}>
+      {msg && (
+        <div style={{
+          padding: '10px 14px', borderRadius: 8, background: '#ECFDF5', color: '#047857',
+          fontSize: 13, fontWeight: 600,
+        }}>
+          {msg}
+        </div>
+      )}
+      {error && <div style={{ fontSize: 12, color: '#B91C1C' }}>{error}</div>}
+
+      {/* ── Project Intake Approval Notifications Banner (Tenant Admin Sign-Off Required) ─────── */}
+      {pendingIntakes.length > 0 && (
+        <div style={{
+          background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 12,
+          padding: '20px 24px', boxShadow: '0 4px 14px rgba(180,83,9,0.06)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#B45309', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <i className="ti ti-bell-ringing" style={{ fontSize: 20 }} />
+              <span>Project Intake Approval Notifications (Tenant Admin Level Sign-Off)</span>
+            </div>
+            <span style={{
+              fontSize: 12, fontWeight: 700, background: '#FEF3C7', color: '#B45309',
+              padding: '4px 12px', borderRadius: 999, border: '1px solid #FCD34D',
+            }}>
+              {pendingIntakes.length} Pending Approval{pendingIntakes.length > 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {pendingIntakes.map((item) => (
+              <div key={item.intakeId} style={{
+                background: '#FFFFFF', border: '1px solid #FCD34D', borderRadius: 10,
+                padding: '16px 20px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A' }}>
+                      {item.project} <span style={{ fontSize: 12, color: '#64748B', fontWeight: 400, fontFamily: 'monospace' }}>({item.intakeId})</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>
+                      Tenant: <strong>{item.tenantName || item.tenantId}</strong> · Submitted by: <strong>{item.submittedByRole || item.submittedBy || 'Tenant User'}</strong> · Cloud: <strong>{item.cloud?.toUpperCase()}</strong> · App: <strong>{item.appCategory?.toUpperCase()}</strong> · Budget: <strong>${item.budgetCeiling}/mo</strong>
+                    </div>
+                  </div>
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: '4px 12px', borderRadius: 999,
+                    background: '#FEF3C7', color: '#B45309', border: '1px solid #FCD34D',
+                  }}>
+                    Pending Tenant Admin Sign-Off
+                  </span>
+                </div>
+                {item.description && (
+                  <div style={{
+                    fontSize: 12, color: '#334155', marginTop: 8, fontStyle: 'italic',
+                    background: '#F8FAFC', padding: '10px 14px', borderRadius: 8, border: '1px solid #E2E8F0',
+                  }}>
+                    "{item.description}"
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 10, marginTop: 14, alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    disabled={decidingIntakeId === item.intakeId}
+                    onClick={() => decideTenantIntake(item.intakeId, 'approve')}
+                    style={{
+                      padding: '9px 18px', background: '#0D9488', color: '#FFFFFF', border: 'none',
+                      borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(13,148,136,0.25)',
+                    }}
+                  >
+                    <i className="ti ti-check" />
+                    {decidingIntakeId === item.intakeId ? 'Processing…' : 'Approve & Forward to Provider Admin'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReviewModalIntake(item)}
+                    style={{
+                      padding: '9px 14px', background: '#FFFFFF', color: '#0F172A', border: '1px solid #CBD5E1',
+                      borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                    }}
+                  >
+                    <i className="ti ti-edit" />
+                    View / Edit Form
+                  </button>
+                  <button
+                    type="button"
+                    disabled={decidingIntakeId === item.intakeId}
+                    onClick={() => decideTenantIntake(item.intakeId, 'reject')}
+                    style={{
+                      padding: '9px 14px', background: '#FFFFFF', color: '#BE123C', border: '1px solid #FECDD3',
+                      borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                    }}
+                  >
+                    <i className="ti ti-x" />
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Main Tenant Admin Roster Card ─────── */}
       <div style={{
         background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
         padding: '18px 20px',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A' }}>Tenant Admin portal</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A' }}>Tenant Admin roster</div>
             <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-              View your registration, invite Tenant Users via the requirement form, and submit edits for Provider review.
-              Tenant User forms stay <strong>PENDING</strong> until Provider Admin approves.
+              Registered Tenant Admins from Provider Admin. Click Tenant ID to view details. Use <strong>Invite Tenant User</strong> to open requirement form.
             </div>
           </div>
           <button
@@ -206,111 +311,6 @@ export default function TenantAdminPortal() {
             {loading ? 'Loading…' : 'Refresh'}
           </button>
         </div>
-
-        {msg && (
-          <div style={{
-            padding: '10px 14px', borderRadius: 8, background: '#ECFDF5', color: '#047857',
-            fontSize: 13, fontWeight: 600, marginBottom: 12,
-          }}>
-            {msg}
-          </div>
-        )}
-        {error && <div style={{ fontSize: 12, color: '#B91C1C', marginBottom: 10 }}>{error}</div>}
-
-        {/* ── Project Intake Approval Notifications Banner (Tenant Admin Sign-Off Required) ─────── */}
-        {pendingIntakes.length > 0 && (
-          <div style={{
-            background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 12,
-            padding: '18px 20px', marginBottom: 20, boxShadow: '0 4px 14px rgba(180,83,9,0.06)',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#B45309', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <i className="ti ti-bell-ringing" style={{ fontSize: 18 }} />
-                <span>Project Intake Approval Notifications (Tenant Admin Level Sign-Off)</span>
-              </div>
-              <span style={{
-                fontSize: 11, fontWeight: 700, background: '#FEF3C7', color: '#B45309',
-                padding: '4px 10px', borderRadius: 999, border: '1px solid #FCD34D',
-              }}>
-                {pendingIntakes.length} Pending Approval{pendingIntakes.length > 1 ? 's' : ''}
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {pendingIntakes.map((item) => (
-                <div key={item.intakeId} style={{
-                  background: '#FFFFFF', border: '1px solid #FCD34D', borderRadius: 10,
-                  padding: '14px 16px', boxShadow: '0 2px 6px rgba(0,0,0,0.02)',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>
-                        {item.project} <span style={{ fontSize: 11, color: '#64748B', fontWeight: 400, fontFamily: 'monospace' }}>({item.intakeId})</span>
-                      </div>
-                      <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>
-                        Tenant: <strong>{item.tenantName || item.tenantId}</strong> · Submitted by: <strong>{item.submittedByRole || item.submittedBy || 'Tenant User'}</strong> · Cloud: <strong>{item.cloud?.toUpperCase()}</strong> · App: <strong>{item.appCategory?.toUpperCase()}</strong> · Budget: <strong>${item.budgetCeiling}/mo</strong>
-                      </div>
-                    </div>
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
-                      background: '#FEF3C7', color: '#B45309', border: '1px solid #FCD34D',
-                    }}>
-                      Pending Tenant Admin Sign-Off
-                    </span>
-                  </div>
-                  {item.description && (
-                    <div style={{
-                      fontSize: 12, color: '#334155', marginTop: 6, fontStyle: 'italic',
-                      background: '#F8FAFC', padding: '8px 12px', borderRadius: 6, border: '1px solid #E2E8F0',
-                    }}>
-                      "{item.description}"
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
-                    <button
-                      type="button"
-                      disabled={decidingIntakeId === item.intakeId}
-                      onClick={() => decideTenantIntake(item.intakeId, 'approve')}
-                      style={{
-                        padding: '8px 16px', background: '#0D9488', color: '#FFFFFF', border: 'none',
-                        borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                        display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(13,148,136,0.25)',
-                      }}
-                    >
-                      <i className="ti ti-check" />
-                      {decidingIntakeId === item.intakeId ? 'Processing…' : 'Approve & Forward to Provider Admin'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setReviewModalIntake(item)}
-                      style={{
-                        padding: '8px 14px', background: '#FFFFFF', color: '#0F172A', border: '1px solid #CBD5E1',
-                        borderRadius: 8, fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                        display: 'inline-flex', alignItems: 'center', gap: 4,
-                      }}
-                    >
-                      <i className="ti ti-edit" />
-                      View / Edit Form
-                    </button>
-                    <button
-                      type="button"
-                      disabled={decidingIntakeId === item.intakeId}
-                      onClick={() => decideTenantIntake(item.intakeId, 'reject')}
-                      style={{
-                        padding: '8px 14px', background: '#FFFFFF', color: '#BE123C', border: '1px solid #FECDD3',
-                        borderRadius: 8, fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                        display: 'inline-flex', alignItems: 'center', gap: 4,
-                      }}
-                    >
-                      <i className="ti ti-x" />
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {myAdmins.length === 0 ? (
           <div style={{
