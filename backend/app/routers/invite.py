@@ -118,22 +118,38 @@ async def create_invite(payload: InviteCreate, db: AsyncSession = Depends(get_db
         tenant_id = tenant.id
         tenant_dict = tenant.to_dict()
 
+    # Check if active invite already exists for this email
+    existing_active = await db.execute(
+        select(UserInvitation).where(
+            func.lower(UserInvitation.email) == payload.email,
+            UserInvitation.archived == False,
+            UserInvitation.decommissioned == False,
+        )
+    )
+    if existing_active.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail=f"An active invitation or requirement form for '{payload.email}' already exists.",
+        )
+
     if payload.role == "TENANT_USER":
         # Prefer explicit tenant_id from Tenant Admin portal when provided
         if payload.tenant_id:
             linked = await db.get(Tenant, payload.tenant_id)
-            if linked and linked.provider_id == provider_id:
+            if linked:
                 tenant_id = linked.id
                 tenant_dict = linked.to_dict()
                 company = linked.org_name or company
+                if linked.provider_id:
+                    provider_id = linked.provider_id
+
         if not tenant_id:
             existing = await db.execute(
                 select(Tenant).where(
-                    Tenant.provider_id == provider_id,
                     func.lower(Tenant.org_name) == company.lower(),
                 )
             )
-            tenant = existing.scalar_one_or_none()
+            tenant = existing.scalars().first()
             if not tenant:
                 # Ensure every tenant company has a generated Tenant ID
                 tenant = Tenant(
@@ -141,14 +157,16 @@ async def create_invite(payload: InviteCreate, db: AsyncSession = Depends(get_db
                     org_name=company,
                     contact_email=payload.email,
                     plan="PROFESSIONAL",
-                    primary_cloud="azure",
-                    compliance="HIPAA",
+                    primary_cloud=(payload.primary_cloud or "azure").lower(),
+                    compliance=payload.compliance or "HIPAA",
                     budget_ceiling=2000,
                 )
                 db.add(tenant)
                 await db.flush()
             tenant_id = tenant.id
             tenant_dict = tenant.to_dict()
+            if tenant.provider_id:
+                provider_id = tenant.provider_id
 
     invite = UserInvitation(
         full_name=payload.full_name.strip(),

@@ -234,7 +234,19 @@ export default function InviteTenantUserFormModal({
       onClose();
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Could not submit Tenant User requirement form.');
+      let text = 'Could not submit Tenant User requirement form.';
+      if (typeof detail === 'string') {
+        text = detail;
+      } else if (Array.isArray(detail) && detail.length > 0) {
+        text = detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
+      } else if (detail && typeof detail === 'object') {
+        text = JSON.stringify(detail);
+      } else if (!err?.response) {
+        text = 'Backend is unreachable. Please check backend server status.';
+      } else if (err?.message) {
+        text = err.message;
+      }
+      setError(text);
     } finally {
       setLoading(false);
     }
