@@ -42,6 +42,14 @@ class IntakeDecisionPayload(BaseModel):
     notes: str = ""
     actor_role: str = "Tenant Admin"
     actor_name: str = "Tenant Admin"
+    # Optional fields modified during review/approval
+    project_name: str | None = None
+    cloud: str | None = None
+    app_category: str | None = None
+    environment: str | None = None
+    compliance: str | None = None
+    budget_ceiling: int | None = None
+    description: str | None = None
 
 
 def _serialize(form: IntakeForm, org_name: str | None = None) -> dict:
@@ -236,11 +244,40 @@ async def decide_intake(
     tenant = await db.get(Tenant, form.tenant_id)
     org = tenant.org_name if tenant else form.tenant_id
 
+    # Check and apply form edits if provided
+    edits = []
+    if payload.project_name and payload.project_name.strip() != form.project_name:
+        edits.append(f"Project Name updated to '{payload.project_name.strip()}'")
+        form.project_name = payload.project_name.strip()
+    if payload.cloud and payload.cloud != form.cloud:
+        edits.append(f"Cloud updated to {payload.cloud.upper()}")
+        form.cloud = payload.cloud
+    if payload.app_category and payload.app_category != form.app_category:
+        edits.append(f"App Category updated to {payload.app_category.upper()}")
+        form.app_category = payload.app_category
+    if payload.environment and payload.environment != form.environment:
+        edits.append(f"Environment updated to {payload.environment}")
+        form.environment = payload.environment
+    if payload.compliance and payload.compliance != form.compliance:
+        edits.append(f"Compliance updated to {payload.compliance}")
+        form.compliance = payload.compliance
+    if payload.budget_ceiling is not None and payload.budget_ceiling != form.budget_ceiling:
+        edits.append(f"Budget Ceiling updated to ${payload.budget_ceiling}/mo")
+        form.budget_ceiling = payload.budget_ceiling
+    if payload.description is not None and payload.description.strip() != form.description:
+        edits.append("Description updated")
+        form.description = payload.description.strip()
+
+    notes_text = payload.notes.strip() if payload.notes else ""
+    if edits:
+        edit_summary = "; ".join(edits)
+        notes_text = f"{notes_text} (Adjustments by {actor}: {edit_summary})".strip()
+
     if decision == "reject":
         form.status = "rejected"
         form.approved_by = payload.actor_name or actor
         form.approved_at = datetime.utcnow()
-        form.review_notes = payload.notes or f"Rejected by {actor}"
+        form.review_notes = notes_text or f"Rejected by {actor}"
         
         await log_activity(
             db,
@@ -251,7 +288,7 @@ async def decide_intake(
             to_name=form.submitted_by or "Submitter",
             message=f"Project Intake rejected by {actor}",
             detail=f"{form.project_name} · {org} — Status updated to Rejected"
-            + (f" · Notes: {payload.notes}" if payload.notes else ""),
+            + (f" · Notes: {notes_text}" if notes_text else ""),
             tenant_id=form.tenant_id,
             unread=True,
         )
@@ -260,7 +297,7 @@ async def decide_intake(
         if actor == "Tenant Admin":
             # Tenant Admin approves Tenant User submission -> Forward to Provider Admin
             form.status = "pending_provider_approval"
-            form.review_notes = payload.notes or "Tenant Admin approved. Forwarded to Provider Admin."
+            form.review_notes = notes_text or "Tenant Admin approved. Forwarded to Provider Admin."
             
             await log_activity(
                 db,
@@ -270,7 +307,8 @@ async def decide_intake(
                 from_name=payload.actor_name or "Tenant Admin",
                 to_name="Provider Admin",
                 message="Tenant Admin approved Project Intake — forwarded to Provider Admin",
-                detail=f"{form.project_name} · {org} — Requires final Provider Admin level approval",
+                detail=f"{form.project_name} · {org} — Requires final Provider Admin level approval"
+                + (f" · Notes: {notes_text}" if notes_text else ""),
                 tenant_id=form.tenant_id,
                 unread=True,
             )
@@ -279,7 +317,7 @@ async def decide_intake(
             form.status = "queued_for_recommendation"
             form.approved_by = payload.actor_name or "Provider Admin"
             form.approved_at = datetime.utcnow()
-            form.review_notes = payload.notes or "Provider Admin approved. AI Recommendation unlocked."
+            form.review_notes = notes_text or "Provider Admin approved. AI Recommendation unlocked."
             
             await log_activity(
                 db,
@@ -289,7 +327,8 @@ async def decide_intake(
                 from_name=payload.actor_name or "Provider Admin",
                 to_name="Stage 2 — AI Recommendation",
                 message="Provider Admin approved Project Intake — AI Recommendation Unlocked",
-                detail=f"{form.project_name} · {org} — AI recommendation, cost estimation & Terraform unlocked",
+                detail=f"{form.project_name} · {org} — AI recommendation & workflow unlocked"
+                + (f" · Notes: {notes_text}" if notes_text else ""),
                 tenant_id=form.tenant_id,
                 unread=True,
             )

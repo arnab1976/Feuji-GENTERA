@@ -8,6 +8,7 @@ import { inviteApi, workflowApi } from '@/services/api';
 import type { InvitedUser, IntakeForm as IntakeFormType } from '@/types';
 import RegisterTenantAdminModal, { type IntakeModalMode } from './RegisterTenantAdminModal';
 import InviteTenantUserFormModal from '@/components/admin/InviteTenantUserFormModal';
+import IntakeReviewModal from '@/components/workflow/IntakeReviewModal';
 
 function mapInviteRow(d: any): InvitedUser {
   return {
@@ -71,6 +72,7 @@ export default function TenantAdminPortal() {
   const [inviteForAdmin, setInviteForAdmin] = useState<InvitedUser | null>(null);
   const [pendingIntakes, setPendingIntakes] = useState<IntakeFormType[]>([]);
   const [decidingIntakeId, setDecidingIntakeId] = useState<string | null>(null);
+  const [reviewModalIntake, setReviewModalIntake] = useState<IntakeFormType | null>(null);
 
   const currentProvider = provider ?? providers.find((p) => !p.archived && !p.deleted) ?? null;
 
@@ -347,6 +349,18 @@ export default function TenantAdminPortal() {
                           </button>
                           <button
                             type="button"
+                            onClick={() => setReviewModalIntake(item)}
+                            style={{
+                              padding: '8px 14px', background: '#FFFFFF', color: '#0F172A', border: '1px solid #CBD5E1',
+                              borderRadius: 8, fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                              display: 'inline-flex', alignItems: 'center', gap: 4,
+                            }}
+                          >
+                            <i className="ti ti-edit" />
+                            View / Edit Form
+                          </button>
+                          <button
+                            type="button"
                             disabled={decidingIntakeId === item.intakeId}
                             onClick={() => decideTenantIntake(item.intakeId, 'reject')}
                             style={{
@@ -520,6 +534,18 @@ export default function TenantAdminPortal() {
         open={Boolean(inviteForAdmin)}
         tenantAdmin={inviteForAdmin}
         onClose={() => setInviteForAdmin(null)}
+        onSuccess={(text) => {
+          setMsg(text);
+          setTimeout(() => setMsg(null), 8000);
+          void refresh();
+        }}
+      />
+
+      <IntakeReviewModal
+        open={Boolean(reviewModalIntake)}
+        intake={reviewModalIntake}
+        actorRole="Tenant Admin"
+        onClose={() => setReviewModalIntake(null)}
         onSuccess={(text) => {
           setMsg(text);
           setTimeout(() => setMsg(null), 8000);

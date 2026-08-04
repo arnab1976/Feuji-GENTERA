@@ -806,11 +806,22 @@ export default function IntakeForm() {
               <tbody>
                 {queue.filter((q) => !deletedIds.includes(q.intakeId)).map((item) => (
                   <tr key={item.intakeId} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td style={{ padding: '14px 14px', color: '#0F172A', fontWeight: 700 }}>
+                    <td style={{ padding: '14px 14px', color: '#0F172A', fontWeight: 600 }}>
                       <div>{item.project}</div>
                       <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 400, fontFamily: 'monospace', marginTop: 2 }}>
                         {item.intakeId}
                       </div>
+                      {item.reviewNotes && (
+                        <div style={{
+                          fontSize: 11, color: item.status === 'rejected' ? '#9F1239' : item.status === 'queued_for_recommendation' ? '#065F46' : '#92400E',
+                          background: item.status === 'rejected' ? '#FFF1F2' : item.status === 'queued_for_recommendation' ? '#ECFDF5' : '#FFFBEB',
+                          border: `1px solid ${item.status === 'rejected' ? '#FECDD3' : item.status === 'queued_for_recommendation' ? '#A7F3D0' : '#FDE68A'}`,
+                          padding: '4px 8px', borderRadius: 6, marginTop: 6, fontWeight: 500, lineHeight: 1.35, maxWidth: 280,
+                        }}>
+                          <i className="ti ti-bell-ringing" style={{ marginRight: 4 }} />
+                          <strong>Notification:</strong> {item.reviewNotes}
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: '14px 14px', color: '#334155', fontWeight: 600 }}>
                       {item.tenantName || item.tenantId}

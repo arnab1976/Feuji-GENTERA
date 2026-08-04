@@ -12,6 +12,7 @@ import InviteListSection from '@/components/admin/InviteListSection';
 import RegisterTenantAdminModal, { type IntakeModalMode } from '@/components/admin/RegisterTenantAdminModal';
 import RegisterProviderUserModal, { type ProviderUserModalMode } from '@/components/admin/RegisterProviderUserModal';
 import RegisterTenantUserModal from '@/components/admin/RegisterTenantUserModal';
+import IntakeReviewModal from '@/components/workflow/IntakeReviewModal';
 
 function mapInvite(d: any): InvitedUser {
   return {
@@ -98,6 +99,7 @@ export default function ProviderManagement() {
 
   const [providerPendingIntakes, setProviderPendingIntakes] = useState<IntakeFormType[]>([]);
   const [decidingIntakeId, setDecidingIntakeId] = useState<string | null>(null);
+  const [reviewModalIntake, setReviewModalIntake] = useState<IntakeFormType | null>(null);
 
   const refreshProviderIntakes = async () => {
     try {
@@ -417,7 +419,7 @@ export default function ProviderManagement() {
                     color: item.status === 'pending_provider_approval' ? '#6D28D9' : '#B45309',
                     border: `1px solid ${item.status === 'pending_provider_approval' ? '#DDD6FE' : '#FDE68A'}`,
                   }}>
-                    {item.status === 'pending_provider_approval' ? 'Pending Provider Sign-Off' : 'Pending Tenant Admin Sign-Off (Override Available)'}
+                    {item.status === 'pending_provider_approval' ? 'Pending Provider Sign-Off' : 'Pending with Tenant Admin…'}
                   </span>
                 </div>
                 {item.description && (
@@ -457,6 +459,18 @@ export default function ProviderManagement() {
                   >
                     <i className="ti ti-check" />
                     {decidingIntakeId === item.intakeId ? 'Processing…' : 'Approve → Unlock AI Engine'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReviewModalIntake(item)}
+                    style={{
+                      padding: '8px 14px', background: '#FFFFFF', color: '#0F172A', border: '1px solid #CBD5E1',
+                      borderRadius: 8, fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                    }}
+                  >
+                    <i className="ti ti-edit" />
+                    View / Edit Form
                   </button>
                   <button
                     type="button"
@@ -1325,6 +1339,17 @@ export default function ProviderManagement() {
           inviteApi.list()
             .then((res) => useAppStore.getState().setInvitedUsers((res.data || []).map(mapInvite)))
             .catch(() => {});
+        }}
+      />
+
+      <IntakeReviewModal
+        open={Boolean(reviewModalIntake)}
+        intake={reviewModalIntake}
+        actorRole="Provider Admin"
+        onClose={() => setReviewModalIntake(null)}
+        onSuccess={(text) => {
+          setMessage({ type: 'success', text });
+          void refreshProviderIntakes();
         }}
       />
     </div>
