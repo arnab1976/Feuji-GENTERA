@@ -299,7 +299,7 @@ export default function TenantAdminPortal() {
 
                   {/* ── Project Intake Form Approval Notifications for Tenant Admin ─────── */}
                   {pendingIntakes
-                    .filter((item) => item.tenantId === u.tenantId || (u.companyName && item.tenantName?.toLowerCase().includes(u.companyName.toLowerCase())))
+                    .filter((item) => !u.tenantId || item.tenantId === u.tenantId || (u.companyName && item.tenantName?.toLowerCase().includes(u.companyName.toLowerCase())))
                     .map((item) => (
                       <div key={item.intakeId} style={{
                         marginTop: 12, padding: '14px 16px', borderRadius: 10,

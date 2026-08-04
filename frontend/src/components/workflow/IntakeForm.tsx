@@ -85,16 +85,16 @@ function mapIntake(d: any): IntakeFormType {
 function statusBadge(status: string) {
   const map: Record<string, { bg: string; color: string; border: string; label: string }> = {
     pending_tenant_approval: {
-      bg: '#FEF3C7', color: '#B45309', border: '#FDE68A', label: 'Pending Tenant Approval',
+      bg: '#FEF3C7', color: '#B45309', border: '#FDE68A', label: 'Pending with Tenant Admin',
     },
     pending_provider_approval: {
-      bg: '#EDE9FE', color: '#6D28D9', border: '#DDD6FE', label: 'Pending Provider Approval',
+      bg: '#EDE9FE', color: '#6D28D9', border: '#DDD6FE', label: 'Pending with Provider Admin',
     },
     queued_for_recommendation: {
-      bg: '#CCFBF1', color: '#0F766E', border: '#99F6E4', label: 'Queued for AI (Approved)',
+      bg: '#D1FAE5', color: '#047857', border: '#A7F3D0', label: 'Approved — Stage 2 Unlocked',
     },
     rejected: {
-      bg: '#FEE2E2', color: '#B91C1C', border: '#FECDD3', label: 'Rejected / Access Denied',
+      bg: '#FEE2E2', color: '#B91C1C', border: '#FECDD3', label: 'Rejected',
     },
   };
   const s = map[status] || { bg: '#F1F5F9', color: '#475569', border: '#E2E8F0', label: status };
@@ -102,7 +102,12 @@ function statusBadge(status: string) {
     <span style={{
       fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
       padding: '4px 10px', borderRadius: 999, background: s.bg, color: s.color, border: `1px solid ${s.border}`,
+      display: 'inline-flex', alignItems: 'center', gap: 4,
     }}>
+      {status === 'pending_tenant_approval' && <i className="ti ti-clock" />}
+      {status === 'pending_provider_approval' && <i className="ti ti-shield-clock" />}
+      {status === 'queued_for_recommendation' && <i className="ti ti-circle-check" />}
+      {status === 'rejected' && <i className="ti ti-circle-x" />}
       {s.label}
     </span>
   );
@@ -383,9 +388,10 @@ export default function IntakeForm() {
   };
 
   const pending = queue.filter((q) => {
+    if (currentRole === 'Tenant User') return false;
     if (currentRole === 'Tenant Admin') return q.status === 'pending_tenant_approval';
     if (currentRole === 'Provider Admin') return q.status === 'pending_provider_approval' || q.status === 'pending_tenant_approval';
-    return q.status === 'pending_tenant_approval' || q.status === 'pending_provider_approval';
+    return false;
   });
   const recent = queue.filter((q) => q.status !== 'pending_approval').slice(0, 8);
 
@@ -456,18 +462,20 @@ export default function IntakeForm() {
               {
                 role: 'Tenant User',
                 label: 'Tenant User',
-                desc: 'Approval required from Tenant Admin -> Provider Admin',
+                desc: 'Approval required: Tenant Admin -> Provider Admin',
                 color: '#2563EB',
                 bg: '#EFF6FF',
                 icon: 'ti-user',
+                allowed: ['Provider Admin', 'Tenant Admin', 'Tenant User'].includes(currentRole),
               },
               {
                 role: 'Tenant Admin',
                 label: 'Tenant Admin',
-                desc: 'Fills on behalf of Tenant User — Approval required from Provider Admin',
+                desc: 'Fills on behalf of Tenant User — 1-Level Approval from Provider Admin required',
                 color: '#0D9488',
                 bg: '#F0FDFA',
                 icon: 'ti-building',
+                allowed: ['Provider Admin', 'Tenant Admin'].includes(currentRole),
               },
               {
                 role: 'Provider Admin',
@@ -476,23 +484,30 @@ export default function IntakeForm() {
                 color: '#7C3AED',
                 bg: '#F5F3FF',
                 icon: 'ti-shield-check',
+                allowed: currentRole === 'Provider Admin',
               },
             ].map((r) => {
               const selected = submitterRole === r.role;
+              const disabled = !r.allowed;
               return (
                 <div
                   key={r.role}
-                  onClick={() => setSubmitterRole(r.role as any)}
+                  onClick={() => {
+                    if (!disabled) setSubmitterRole(r.role as any);
+                  }}
+                  title={disabled ? `Requires higher role privileges (Active role: ${currentRole})` : ''}
                   style={{
-                    padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
+                    padding: '12px 14px', borderRadius: 10,
+                    cursor: disabled ? 'not-allowed' : 'pointer',
+                    opacity: disabled ? 0.45 : 1,
                     border: selected ? `2px solid ${r.color}` : '1px solid #E2E8F0',
-                    background: selected ? r.bg : '#FFFFFF',
+                    background: selected ? r.bg : disabled ? '#F1F5F9' : '#FFFFFF',
                     boxShadow: selected ? `0 4px 12px ${r.color}22` : 'none',
                     transition: 'all 0.15s ease',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: selected ? r.color : '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: selected ? r.color : disabled ? '#94A3B8' : '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
                       <i className={`ti ${r.icon}`} />
                       {r.label}
                     </div>
@@ -500,12 +515,15 @@ export default function IntakeForm() {
                       type="radio"
                       name="submitterPersona"
                       checked={selected}
-                      onChange={() => setSubmitterRole(r.role as any)}
-                      style={{ accentColor: r.color, cursor: 'pointer' }}
+                      disabled={disabled}
+                      onChange={() => {
+                        if (!disabled) setSubmitterRole(r.role as any);
+                      }}
+                      style={{ accentColor: r.color, cursor: disabled ? 'not-allowed' : 'pointer' }}
                     />
                   </div>
                   <div style={{ fontSize: 11, color: selected ? '#334155' : '#64748B', lineHeight: 1.35 }}>
-                    {r.desc}
+                    {disabled ? `Restricted — Active role is ${currentRole}` : r.desc}
                   </div>
                 </div>
               );
@@ -866,23 +884,105 @@ export default function IntakeForm() {
                           <i className="ti ti-arrow-right" style={{ fontSize: 12 }} />
                         </button>
                       ) : item.status === 'pending_tenant_approval' ? (
-                        <div style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px',
-                          borderRadius: 8, background: '#FEF3C7', border: '1px solid #FDE68A',
-                          color: '#B45309', fontSize: 11, fontWeight: 600,
-                        }} title="Requires Tenant Admin approval, then Provider Admin approval">
-                          <i className="ti ti-clock" />
-                          <span>Awaiting Tenant Approval</span>
-                        </div>
+                        currentRole === 'Tenant Admin' ? (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              type="button"
+                              disabled={decidingId === item.intakeId}
+                              onClick={() => decide(item.intakeId, 'approve')}
+                              style={{
+                                fontSize: 11, fontWeight: 700, color: '#FFFFFF', background: '#0D9488',
+                                border: 'none', borderRadius: 6, padding: '6px 12px', cursor: 'pointer',
+                                display: 'inline-flex', alignItems: 'center', gap: 4,
+                              }}
+                            >
+                              <i className="ti ti-check" /> Approve & Forward
+                            </button>
+                            <button
+                              type="button"
+                              disabled={decidingId === item.intakeId}
+                              onClick={() => decide(item.intakeId, 'reject')}
+                              style={{
+                                fontSize: 11, fontWeight: 600, color: '#BE123C', background: '#FFFFFF',
+                                border: '1px solid #FECDD3', borderRadius: 6, padding: '6px 10px', cursor: 'pointer',
+                              }}
+                            >
+                              <i className="ti ti-x" /> Reject
+                            </button>
+                          </div>
+                        ) : currentRole === 'Provider Admin' ? (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              type="button"
+                              disabled={decidingId === item.intakeId}
+                              onClick={() => decide(item.intakeId, 'approve')}
+                              style={{
+                                fontSize: 11, fontWeight: 700, color: '#FFFFFF', background: '#7C3AED',
+                                border: 'none', borderRadius: 6, padding: '6px 12px', cursor: 'pointer',
+                                display: 'inline-flex', alignItems: 'center', gap: 4,
+                              }}
+                            >
+                              <i className="ti ti-bolt" /> Override Approve
+                            </button>
+                            <button
+                              type="button"
+                              disabled={decidingId === item.intakeId}
+                              onClick={() => decide(item.intakeId, 'reject')}
+                              style={{
+                                fontSize: 11, fontWeight: 600, color: '#BE123C', background: '#FFFFFF',
+                                border: '1px solid #FECDD3', borderRadius: 6, padding: '6px 10px', cursor: 'pointer',
+                              }}
+                            >
+                              <i className="ti ti-x" /> Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px',
+                            borderRadius: 8, background: '#FEF3C7', border: '1px solid #FDE68A',
+                            color: '#B45309', fontSize: 11, fontWeight: 600,
+                          }} title="Requires Tenant Admin approval, then Provider Admin approval">
+                            <i className="ti ti-clock" />
+                            <span>Pending with Tenant Admin</span>
+                          </div>
+                        )
                       ) : item.status === 'pending_provider_approval' ? (
-                        <div style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px',
-                          borderRadius: 8, background: '#EDE9FE', border: '1px solid #DDD6FE',
-                          color: '#6D28D9', fontSize: 11, fontWeight: 600,
-                        }} title="Requires Provider Admin approval before Stage 2 AI">
-                          <i className="ti ti-clock" />
-                          <span>Awaiting Provider Approval</span>
-                        </div>
+                        currentRole === 'Provider Admin' ? (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              type="button"
+                              disabled={decidingId === item.intakeId}
+                              onClick={() => decide(item.intakeId, 'approve')}
+                              style={{
+                                fontSize: 11, fontWeight: 700, color: '#FFFFFF', background: '#7C3AED',
+                                border: 'none', borderRadius: 6, padding: '6px 12px', cursor: 'pointer',
+                                display: 'inline-flex', alignItems: 'center', gap: 4,
+                              }}
+                            >
+                              <i className="ti ti-check" /> Approve → Unlock AI
+                            </button>
+                            <button
+                              type="button"
+                              disabled={decidingId === item.intakeId}
+                              onClick={() => decide(item.intakeId, 'reject')}
+                              style={{
+                                fontSize: 11, fontWeight: 600, color: '#BE123C', background: '#FFFFFF',
+                                border: '1px solid #FECDD3', borderRadius: 6, padding: '6px 10px', cursor: 'pointer',
+                              }}
+                            >
+                              <i className="ti ti-x" /> Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px',
+                            borderRadius: 8, background: '#EDE9FE', border: '1px solid #DDD6FE',
+                            color: '#6D28D9', fontSize: 11, fontWeight: 600,
+                          }} title="Requires Provider Admin approval before Stage 2 AI">
+                            <i className="ti ti-shield-clock" />
+                            <span>Pending with Provider Admin</span>
+                          </div>
+                        )
                       ) : (
                         <div style={{
                           display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px',
