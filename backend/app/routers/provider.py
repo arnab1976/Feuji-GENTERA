@@ -92,28 +92,95 @@ async def get_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
     return provider.to_dict_safe()
 
 
+from app.models.workflow import IntakeForm, AIRecommendation, ResourcePlan, TerraformArtifact, DeploymentOutput
+from app.models.optima import OptimizationRecommendation, ApprovalRecord, SavingsRecord
+from app.models.activity import ActivityEvent
+
+
 @router.delete("/provider/{provider_id}")
 async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
     """
-    Permanently delete a provider and related invitations / tenants / users.
-    This cannot be restored.
+    Permanently delete a provider and ALL related workflow/optima/tenant/invitation/user records from PostgreSQL.
+    Frees up the admin email for re-registration. This cannot be restored.
     """
     provider = await db.get(Provider, provider_id)
     if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
+        res = await db.execute(
+            select(Provider).where(func.lower(Provider.id) == provider_id.strip().lower())
+        )
+        provider = res.scalar_one_or_none()
+
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found in database.")
 
     name = provider.name
+    admin_email = provider.admin_email.strip().lower()
 
-    # Invitations first (FK to tenants / providers)
-    await db.execute(
-        sa_delete(UserInvitation).where(UserInvitation.provider_id == provider_id)
+    # Collect all associated tenant IDs
+    tenant_ids: list[str] = []
+    t_res = await db.execute(select(Tenant.id).where(Tenant.provider_id == provider.id))
+    for tid in t_res.scalars().all():
+        if tid and tid not in tenant_ids:
+            tenant_ids.append(tid)
+
+    inv_res = await db.execute(
+        select(UserInvitation.tenant_id).where(
+            (UserInvitation.provider_id == provider.id) |
+            (func.lower(UserInvitation.email) == admin_email)
+        )
     )
-    # Tenants under this provider
-    await db.execute(sa_delete(Tenant).where(Tenant.provider_id == provider_id))
-    # Provider users
+    for tid in inv_res.scalars().all():
+        if tid and tid not in tenant_ids:
+            tenant_ids.append(tid)
+
+    # 1. Delete dependent workflow & OPTIMA child records for these tenant_ids
+    if tenant_ids:
+        await db.execute(sa_delete(OptimizationRecommendation).where(OptimizationRecommendation.tenant_id.in_(tenant_ids)))
+        await db.execute(sa_delete(ApprovalRecord).where(ApprovalRecord.tenant_id.in_(tenant_ids)))
+        await db.execute(sa_delete(SavingsRecord).where(SavingsRecord.tenant_id.in_(tenant_ids)))
+        await db.execute(sa_delete(DeploymentOutput).where(DeploymentOutput.tenant_id.in_(tenant_ids)))
+        await db.execute(sa_delete(TerraformArtifact).where(TerraformArtifact.tenant_id.in_(tenant_ids)))
+        await db.execute(sa_delete(ResourcePlan).where(ResourcePlan.tenant_id.in_(tenant_ids)))
+        await db.execute(sa_delete(AIRecommendation).where(AIRecommendation.tenant_id.in_(tenant_ids)))
+        await db.execute(sa_delete(IntakeForm).where(IntakeForm.tenant_id.in_(tenant_ids)))
+        await db.execute(sa_delete(ActivityEvent).where(ActivityEvent.tenant_id.in_(tenant_ids)))
+
+    # 2. Delete invitations by provider_id, admin_email, or tenant_id
+    if tenant_ids:
+        await db.execute(
+            sa_delete(UserInvitation).where(
+                (UserInvitation.provider_id == provider.id) |
+                (func.lower(UserInvitation.email) == admin_email) |
+                (UserInvitation.tenant_id.in_(tenant_ids))
+            )
+        )
+    else:
+        await db.execute(
+            sa_delete(UserInvitation).where(
+                (UserInvitation.provider_id == provider.id) |
+                (func.lower(UserInvitation.email) == admin_email)
+            )
+        )
+
+    # 3. Delete tenants
+    if tenant_ids:
+        await db.execute(
+            sa_delete(Tenant).where(
+                (Tenant.provider_id == provider.id) | (Tenant.id.in_(tenant_ids))
+            )
+        )
+    else:
+        await db.execute(sa_delete(Tenant).where(Tenant.provider_id == provider.id))
+
+    # 4. Delete provider users by provider_id OR admin_email
     await db.execute(
-        sa_delete(ProviderUser).where(ProviderUser.provider_id == provider_id)
+        sa_delete(ProviderUser).where(
+            (ProviderUser.provider_id == provider.id) |
+            (func.lower(ProviderUser.email) == admin_email)
+        )
     )
+
+    # 5. Delete provider itself
     await db.delete(provider)
     await db.commit()
 
@@ -121,4 +188,6 @@ async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
         "deleted": True,
         "providerId": provider_id,
         "name": name,
+        "adminEmail": admin_email,
+        "tenantsPurged": len(tenant_ids),
     }

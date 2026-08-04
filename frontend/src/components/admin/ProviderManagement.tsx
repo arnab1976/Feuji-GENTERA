@@ -829,16 +829,42 @@ export default function ProviderManagement() {
         <div style={{ marginTop: 22 }}>
           <div style={{
             fontSize: 11, fontWeight: 600, color: '#64748B', textTransform: 'uppercase',
-            letterSpacing: '0.06em', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6,
+            letterSpacing: '0.06em', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            flexWrap: 'wrap', gap: 10,
           }}>
-            <i className="ti ti-archive" style={{ fontSize: 14 }} />
-            Archive
-            <span style={{
-              fontSize: 10, fontWeight: 700, color: '#475569', background: '#E2E8F0',
-              padding: '2px 8px', borderRadius: 999,
-            }}>
-              {archivedInvites.length}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-archive" style={{ fontSize: 14 }} />
+              Archive
+              <span style={{
+                fontSize: 10, fontWeight: 700, color: '#475569', background: '#E2E8F0',
+                padding: '2px 8px', borderRadius: 999,
+              }}>
+                {archivedInvites.length}
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={!canMutate || actionBusy === 'purge-all'}
+              onClick={async () => {
+                if (!confirm('Are you sure you want to permanently delete ALL archived items from PostgreSQL? This cannot be restored.')) return;
+                setActionBusy('purge-all');
+                try {
+                  await inviteApi.purgeAllArchived();
+                } catch { /* fallback */ }
+                const remaining = (useAppStore.getState().invitedUsers || []).filter((u) => !u.archived && !u.decommissioned);
+                useAppStore.getState().setInvitedUsers(remaining);
+                setActionBusy(null);
+                setMessage({ type: 'success', text: 'All archived items permanently deleted from PostgreSQL database.' });
+              }}
+              style={{
+                padding: '4px 10px', fontSize: 11, fontWeight: 700, color: '#B91C1C',
+                background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6,
+                cursor: canMutate ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}
+            >
+              <i className="ti ti-trash" style={{ fontSize: 13 }} />
+              Clear Archive (Delete All)
+            </button>
           </div>
           <div style={{
             background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12, overflow: 'hidden',

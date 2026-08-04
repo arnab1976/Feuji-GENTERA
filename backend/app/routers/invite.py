@@ -969,16 +969,19 @@ async def restore_invite(invite_id: str, db: AsyncSession = Depends(get_db)):
 @router.delete("/invite/{invite_id}/purge")
 async def purge_invite(invite_id: str, db: AsyncSession = Depends(get_db)):
     """
-    Permanently delete an archived invitation.
+    Permanently delete an invitation from PostgreSQL.
     Also removes the linked tenant registration when no other invites remain.
     This cannot be restored.
     """
-    invite = await _get_invite(invite_id, db)
-    if not invite.archived and not invite.decommissioned:
-        raise HTTPException(
-            status_code=400,
-            detail="Only archived invitations can be permanently deleted. Move to Archive first.",
-        )
+    try:
+        invite = await _get_invite(invite_id, db)
+    except HTTPException:
+        # Check by id directly
+        res = await db.execute(select(UserInvitation).where(UserInvitation.id == invite_id))
+        invite = res.scalar_one_or_none()
+
+    if not invite:
+        return {"deleted": True, "inviteId": invite_id, "note": "Invite not found or already deleted."}
 
     tenant_id = invite.tenant_id
     company = invite.company_name
@@ -992,6 +995,18 @@ async def purge_invite(invite_id: str, db: AsyncSession = Depends(get_db)):
         )
         leftover = remaining.scalars().all()
         if not leftover:
+            from app.models.workflow import IntakeForm, AIRecommendation, ResourcePlan, TerraformArtifact, DeploymentOutput
+            from app.models.optima import OptimizationRecommendation, ApprovalRecord, SavingsRecord
+            from app.models.activity import ActivityEvent
+            await db.execute(sa_delete(OptimizationRecommendation).where(OptimizationRecommendation.tenant_id == tenant_id))
+            await db.execute(sa_delete(ApprovalRecord).where(ApprovalRecord.tenant_id == tenant_id))
+            await db.execute(sa_delete(SavingsRecord).where(SavingsRecord.tenant_id == tenant_id))
+            await db.execute(sa_delete(DeploymentOutput).where(DeploymentOutput.tenant_id == tenant_id))
+            await db.execute(sa_delete(TerraformArtifact).where(TerraformArtifact.tenant_id == tenant_id))
+            await db.execute(sa_delete(ResourcePlan).where(ResourcePlan.tenant_id == tenant_id))
+            await db.execute(sa_delete(AIRecommendation).where(AIRecommendation.tenant_id == tenant_id))
+            await db.execute(sa_delete(IntakeForm).where(IntakeForm.tenant_id == tenant_id))
+            await db.execute(sa_delete(ActivityEvent).where(ActivityEvent.tenant_id == tenant_id))
             tenant = await db.get(Tenant, tenant_id)
             if tenant:
                 await db.delete(tenant)
@@ -1005,3 +1020,42 @@ async def purge_invite(invite_id: str, db: AsyncSession = Depends(get_db)):
         "companyName": company,
         "tenantDeleted": tenant_deleted,
     }
+
+
+@router.delete("/invites/purge-all-archived")
+async def purge_all_archived_invites(db: AsyncSession = Depends(get_db)):
+    """Permanently delete all archived and decommissioned invitations from PostgreSQL."""
+    from app.models.workflow import IntakeForm, AIRecommendation, ResourcePlan, TerraformArtifact, DeploymentOutput
+    from app.models.optima import OptimizationRecommendation, ApprovalRecord, SavingsRecord
+    from app.models.activity import ActivityEvent
+
+    archived_res = await db.execute(
+        select(UserInvitation.tenant_id).where(
+            (UserInvitation.archived == True) | (UserInvitation.decommissioned == True)
+        )
+    )
+    archived_tenant_ids = [t for t in archived_res.scalars().all() if t]
+
+    if archived_tenant_ids:
+        await db.execute(sa_delete(OptimizationRecommendation).where(OptimizationRecommendation.tenant_id.in_(archived_tenant_ids)))
+        await db.execute(sa_delete(ApprovalRecord).where(ApprovalRecord.tenant_id.in_(archived_tenant_ids)))
+        await db.execute(sa_delete(SavingsRecord).where(SavingsRecord.tenant_id.in_(archived_tenant_ids)))
+        await db.execute(sa_delete(DeploymentOutput).where(DeploymentOutput.tenant_id.in_(archived_tenant_ids)))
+        await db.execute(sa_delete(TerraformArtifact).where(TerraformArtifact.tenant_id.in_(archived_tenant_ids)))
+        await db.execute(sa_delete(ResourcePlan).where(ResourcePlan.tenant_id.in_(archived_tenant_ids)))
+        await db.execute(sa_delete(AIRecommendation).where(AIRecommendation.tenant_id.in_(archived_tenant_ids)))
+        await db.execute(sa_delete(IntakeForm).where(IntakeForm.tenant_id.in_(archived_tenant_ids)))
+        await db.execute(sa_delete(ActivityEvent).where(ActivityEvent.tenant_id.in_(archived_tenant_ids)))
+
+    result = await db.execute(
+        sa_delete(UserInvitation).where(
+            (UserInvitation.archived == True) | (UserInvitation.decommissioned == True)
+        )
+    )
+    count = result.rowcount
+
+    if archived_tenant_ids:
+        await db.execute(sa_delete(Tenant).where(Tenant.id.in_(archived_tenant_ids)))
+
+    await db.commit()
+    return {"deletedCount": count}

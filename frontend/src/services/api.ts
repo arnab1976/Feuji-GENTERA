@@ -47,6 +47,7 @@ export const inviteApi = {
   submitEdit:       (id: string, data: object) => api.patch(`/invite/${id}/submit-edit`, data),
   review:           (id: string, data: object) => api.patch(`/invite/${id}/review`, data),
   purge:            (id: string)   => api.delete(`/invite/${id}/purge`),
+  purgeAllArchived: ()             => api.delete('/invites/purge-all-archived'),
 };
 
 export const activityApi = {
