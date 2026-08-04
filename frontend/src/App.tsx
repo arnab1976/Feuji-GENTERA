@@ -61,7 +61,13 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 }
 
 export default function App() {
-  const { currentPage } = useAppStore();
+  const { currentPage, setPage } = useAppStore();
+
+  React.useEffect(() => {
+    // Opening application link always defaults to Home Page
+    setPage('home');
+  }, []);
+
   const showSidebar = currentPage !== 'home';
 
   return (

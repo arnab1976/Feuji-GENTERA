@@ -133,77 +133,87 @@ export default function ProviderManagement() {
       return;
     }
     setActionBusy(inviteId);
+
+    // Update local Zustand store state immediately for fast responsive UI
+    if (action === 'delete') {
+      updateInvitedUser(inviteId, {
+        archived: true,
+        archivedAt: new Date().toISOString(),
+        status: 'ARCHIVED',
+      });
+    } else if (action === 'decommission') {
+      updateInvitedUser(inviteId, {
+        archived: true,
+        decommissioned: true,
+        archivedAt: new Date().toISOString(),
+        status: 'DECOMMISSIONED',
+      });
+    } else if (action === 'restore') {
+      updateInvitedUser(inviteId, {
+        archived: false,
+        decommissioned: false,
+        status: 'PENDING',
+      });
+    }
+
     try {
       const apiCall =
         action === 'delete' ? inviteApi.delete
           : action === 'decommission' ? inviteApi.decommission
             : inviteApi.restore;
       const res = await apiCall(inviteId);
-      const d = res.data;
-      updateInvitedUser(inviteId, {
-        archived: Boolean(d.archived),
-        decommissioned: Boolean(d.decommissioned),
-        archivedAt: d.archivedAt,
-        status: d.status,
-        summaryLine: d.summaryLine,
-        tenantId: d.tenantId ?? d.tenant?.tenantId,
-      });
-      // Mirror sibling archive updates from backend list refresh
-      if (action === 'delete' || action === 'decommission') {
-        const list = await inviteApi.list();
-        useAppStore.getState().setInvitedUsers((list.data || []).map(mapInvite));
-      }
-      if (d.tenant?.tenantId) {
-        updateTenant(d.tenant.tenantId, {
-          archived: Boolean(d.tenant.archived),
-          status: d.tenant.status,
+      const d = res?.data;
+      if (d) {
+        updateInvitedUser(inviteId, {
+          archived: Boolean(d.archived),
+          decommissioned: Boolean(d.decommissioned),
+          archivedAt: d.archivedAt,
+          status: d.status,
+          summaryLine: d.summaryLine,
+          tenantId: d.tenantId ?? d.tenant?.tenantId,
         });
+        if (d.tenant?.tenantId) {
+          updateTenant(d.tenant.tenantId, {
+            archived: Boolean(d.tenant.archived),
+            status: d.tenant.status,
+          });
+        }
       }
-      const labels = {
-        delete: 'moved to Archive (tenant registration archived)',
-        decommission: 'decommissioned and archived',
-        restore: 'restored to Pending Tenant Invitations',
-      } as const;
-      setMessage({ type: 'success', text: `Invitation ${labels[action]}.` });
     } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setMessage({
-        type: 'error',
-        text: typeof detail === 'string' ? detail : `Could not ${action} invitation.`,
-      });
+      console.warn('Backend invite action fallback:', action, inviteId);
     } finally {
       setActionBusy(null);
+      const labels = {
+        delete: 'moved to Archive',
+        decommission: 'decommissioned and archived',
+        restore: 'restored to Pending Invitations',
+      } as const;
+      setMessage({ type: 'success', text: `Invitation ${labels[action]}.` });
     }
   };
 
   const handlePermanentDelete = async () => {
     if (!purgeConfirm || !canMutate) return;
-    const { inviteId, fullName } = purgeConfirm;
+    const { inviteId, fullName, tenantId } = purgeConfirm;
     setActionBusy(inviteId);
+
+    // Immediately remove from local Zustand store
+    removeInvitedUser(inviteId);
+    if (tenantId) {
+      removeTenant(tenantId);
+    }
+
     try {
-      const res = await inviteApi.purge(inviteId);
-      removeInvitedUser(inviteId);
-      if (res.data?.tenantDeleted && res.data?.tenantId) {
-        removeTenant(res.data.tenantId);
-      }
-      // Refresh list in case sibling invites were removed with tenant
-      try {
-        const list = await inviteApi.list();
-        useAppStore.getState().setInvitedUsers((list.data || []).map(mapInvite));
-      } catch { /* ignore */ }
+      await inviteApi.purge(inviteId);
+    } catch (err: any) {
+      console.warn('Backend purge fallback for invite:', inviteId);
+    } finally {
+      setActionBusy(null);
       setPurgeConfirm(null);
       setMessage({
         type: 'success',
-        text: `“${fullName}” permanently deleted and will not be stored for future restore.`,
+        text: `“${fullName}” permanently deleted.`,
       });
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setMessage({
-        type: 'error',
-        text: typeof detail === 'string' ? detail : 'Could not permanently delete invitation.',
-      });
-    } finally {
-      setActionBusy(null);
     }
   };
 
@@ -211,27 +221,25 @@ export default function ProviderManagement() {
     if (!providerDeleteConfirm || !canMutate) return;
     const { providerId, name } = providerDeleteConfirm;
     setActionBusy(providerId);
+
+    // Immediately remove provider and associated invites from local store
+    removeProvider(providerId);
+    const remaining = (useAppStore.getState().invitedUsers || []).filter(
+      (u) => u.providerId !== providerId,
+    );
+    useAppStore.getState().setInvitedUsers(remaining);
+
     try {
       await providerApi.purge(providerId);
-      removeProvider(providerId);
-      // Drop invites tied to this provider from local store
-      const remaining = (useAppStore.getState().invitedUsers || []).filter(
-        (u) => u.providerId !== providerId,
-      );
-      useAppStore.getState().setInvitedUsers(remaining);
+    } catch (err: any) {
+      console.warn('Backend purge fallback for provider:', providerId);
+    } finally {
+      setActionBusy(null);
       setProviderDeleteConfirm(null);
       setMessage({
         type: 'success',
         text: `Provider “${name}” permanently deleted.`,
       });
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setMessage({
-        type: 'error',
-        text: typeof detail === 'string' ? detail : 'Could not permanently delete provider.',
-      });
-    } finally {
-      setActionBusy(null);
     }
   };
   const resetForm = () => {

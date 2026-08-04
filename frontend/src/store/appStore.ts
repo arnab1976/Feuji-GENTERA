@@ -229,6 +229,10 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'feuji-llm-kit-store-v4',
+      partialize: (state) => {
+        const { currentPage, ...rest } = state;
+        return rest;
+      },
     }
   )
 );
