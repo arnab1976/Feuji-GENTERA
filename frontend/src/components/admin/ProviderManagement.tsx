@@ -4,8 +4,8 @@
  */
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/appStore';
-import { inviteApi, providerApi } from '@/services/api';
-import type { InvitedUser, Provider } from '@/types';
+import { inviteApi, providerApi, workflowApi } from '@/services/api';
+import type { InvitedUser, Provider, IntakeForm as IntakeFormType } from '@/types';
 import { canManageProviders } from '@/lib/rbac';
 import InviteUserModal from '@/components/admin/InviteUserModal';
 import InviteListSection from '@/components/admin/InviteListSection';
@@ -96,6 +96,34 @@ export default function ProviderManagement() {
   const [puModalOpen, setPuModalOpen] = useState(false);
   const [tuReviewInvite, setTuReviewInvite] = useState<InvitedUser | null>(null);
 
+  const [providerPendingIntakes, setProviderPendingIntakes] = useState<IntakeFormType[]>([]);
+  const [decidingIntakeId, setDecidingIntakeId] = useState<string | null>(null);
+
+  const refreshProviderIntakes = async () => {
+    try {
+      const res = await workflowApi.listIntakes();
+      const items = (res.data?.items || []).map((d: any) => ({
+        intakeId: d.intakeId,
+        tenantId: d.tenantId,
+        tenantName: d.tenantName,
+        project: d.project,
+        cloud: d.cloud,
+        appCategory: d.appCategory,
+        environment: d.environment,
+        compliance: d.compliance,
+        budgetCeiling: d.budgetCeiling,
+        description: d.description || '',
+        status: d.status,
+        submittedBy: d.submittedBy,
+        submittedByRole: d.submittedByRole,
+        submittedAt: d.submittedAt,
+      })) as IntakeFormType[];
+      setProviderPendingIntakes(items.filter((q) => q.status === 'pending_provider_approval' || q.status === 'pending_tenant_approval'));
+    } catch {
+      setProviderPendingIntakes([]);
+    }
+  };
+
   useEffect(() => {
     providerApi.list()
       .then((res) => {
@@ -122,6 +150,8 @@ export default function ProviderManagement() {
         useAppStore.getState().setInvitedUsers((res.data || []).map(mapInvite));
       })
       .catch(() => { /* keep local */ });
+
+    refreshProviderIntakes();
   }, [setProviders]);
 
   const handleInviteAction = async (
@@ -344,6 +374,123 @@ export default function ProviderManagement() {
         }}>
           <i className={`ti ${message.type === 'success' ? 'ti-check' : 'ti-alert-circle'}`} style={{ fontSize: 16 }} />
           <span>{message.text}</span>
+        </div>
+      )}
+
+      {/* Provider Admin Project Intake Approval Notifications Card */}
+      {providerPendingIntakes.length > 0 && (
+        <div style={{
+          background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 12,
+          padding: '18px 20px', marginBottom: 24, boxShadow: '0 4px 14px rgba(109,40,217,0.06)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#6D28D9', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <i className="ti ti-bell-ringing" style={{ fontSize: 18 }} />
+              <span>Project Intake Approval Notifications (Provider Admin Level Sign-Off)</span>
+            </div>
+            <span style={{
+              fontSize: 11, fontWeight: 700, background: '#EDE9FE', color: '#6D28D9',
+              padding: '4px 10px', borderRadius: 999, border: '1px solid #C4B5FD',
+            }}>
+              {providerPendingIntakes.length} Pending Approval{providerPendingIntakes.length > 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {providerPendingIntakes.map((item) => (
+              <div key={item.intakeId} style={{
+                background: '#FFFFFF', border: '1px solid #C4B5FD', borderRadius: 10,
+                padding: '14px 16px', boxShadow: '0 2px 6px rgba(0,0,0,0.02)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>
+                      {item.project} <span style={{ fontSize: 11, color: '#64748B', fontWeight: 400, fontFamily: 'monospace' }}>({item.intakeId})</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>
+                      Tenant: <strong>{item.tenantName || item.tenantId}</strong> · Submitted by: <strong>{item.submittedByRole || item.submittedBy || 'Tenant User'}</strong> · Cloud: <strong>{item.cloud?.toUpperCase()}</strong> · App: <strong>{item.appCategory?.toUpperCase()}</strong> · Budget: <strong>${item.budgetCeiling}/mo</strong>
+                    </div>
+                  </div>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
+                    background: item.status === 'pending_provider_approval' ? '#EDE9FE' : '#FEF3C7',
+                    color: item.status === 'pending_provider_approval' ? '#6D28D9' : '#B45309',
+                    border: `1px solid ${item.status === 'pending_provider_approval' ? '#DDD6FE' : '#FDE68A'}`,
+                  }}>
+                    {item.status === 'pending_provider_approval' ? 'Pending Provider Sign-Off' : 'Pending Tenant Admin Sign-Off (Override Available)'}
+                  </span>
+                </div>
+                {item.description && (
+                  <div style={{
+                    fontSize: 12, color: '#334155', marginTop: 6, fontStyle: 'italic',
+                    background: '#F8FAFC', padding: '8px 12px', borderRadius: 6, border: '1px solid #E2E8F0',
+                  }}>
+                    "{item.description}"
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    disabled={decidingIntakeId === item.intakeId}
+                    onClick={async () => {
+                      setDecidingIntakeId(item.intakeId);
+                      try {
+                        await workflowApi.decideIntake(item.intakeId, {
+                          decision: 'approve',
+                          notes: 'Approved by Provider Admin persona',
+                          actor_role: 'Provider Admin',
+                          actor_name: 'Provider Admin',
+                        });
+                        setMessage({ type: 'success', text: `Intake ${item.intakeId} approved by Provider Admin! Stage 2 AI Recommendation unlocked.` });
+                        await refreshProviderIntakes();
+                      } catch {
+                        setMessage({ type: 'error', text: 'Approval failed.' });
+                      } finally {
+                        setDecidingIntakeId(null);
+                      }
+                    }}
+                    style={{
+                      padding: '8px 16px', background: '#7C3AED', color: '#FFFFFF', border: 'none',
+                      borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(124,58,237,0.25)',
+                    }}
+                  >
+                    <i className="ti ti-check" />
+                    {decidingIntakeId === item.intakeId ? 'Processing…' : 'Approve → Unlock AI Engine'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={decidingIntakeId === item.intakeId}
+                    onClick={async () => {
+                      setDecidingIntakeId(item.intakeId);
+                      try {
+                        await workflowApi.decideIntake(item.intakeId, {
+                          decision: 'reject',
+                          notes: 'Rejected by Provider Admin persona',
+                          actor_role: 'Provider Admin',
+                          actor_name: 'Provider Admin',
+                        });
+                        setMessage({ type: 'success', text: `Intake ${item.intakeId} rejected.` });
+                        await refreshProviderIntakes();
+                      } catch {
+                        setMessage({ type: 'error', text: 'Rejection failed.' });
+                      } finally {
+                        setDecidingIntakeId(null);
+                      }
+                    }}
+                    style={{
+                      padding: '8px 14px', background: '#FFFFFF', color: '#BE123C', border: '1px solid #FECDD3',
+                      borderRadius: 8, fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                    }}
+                  >
+                    <i className="ti ti-x" />
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
