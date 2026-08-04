@@ -32,6 +32,8 @@ class IntakePayload(BaseModel):
     description: str = ""
     submitted_by: str = "Tenant User"
     submitted_by_role: str = "Tenant User"
+    submitted_by_email: str | None = None
+    tenant_user_id: str | None = None
     tenant_admin_name: str = "Tenant Admin"
 
 
@@ -83,6 +85,11 @@ async def submit_intake(payload: IntakePayload, db: AsyncSession = Depends(get_d
 
     org = tenant.org_name or payload.tenant_id
 
+    # Display name for submitter
+    submitter_name = payload.submitted_by or role
+    if payload.submitted_by_email and payload.submitted_by_email not in submitter_name:
+        submitter_name = f"{submitter_name} ({payload.submitted_by_email})"
+
     # Determine initial status based on submitter role
     if role == "Provider Admin":
         status = "queued_for_recommendation"
@@ -96,7 +103,7 @@ async def submit_intake(payload: IntakePayload, db: AsyncSession = Depends(get_d
         approved_at = None
     else:
         status = "pending_tenant_approval"
-        notes = "Submitted by Tenant User — awaiting Tenant Admin approval"
+        notes = f"Submitted by Tenant User {submitter_name} — awaiting Tenant Admin approval"
         approved_by = None
         approved_at = None
 
@@ -110,7 +117,7 @@ async def submit_intake(payload: IntakePayload, db: AsyncSession = Depends(get_d
         budget_ceiling=payload.budget_ceiling,
         description=payload.description or "",
         status=status,
-        submitted_by=payload.submitted_by or role,
+        submitted_by=submitter_name,
         submitted_by_role=role,
         approved_by=approved_by,
         approved_at=approved_at,
@@ -126,7 +133,7 @@ async def submit_intake(payload: IntakePayload, db: AsyncSession = Depends(get_d
             kind="intake",
             from_role="Provider Admin",
             to_role="AI Engine",
-            from_name=payload.submitted_by or "Provider Admin",
+            from_name=submitter_name,
             to_name="Stage 2 — AI Recommendation",
             message="Project Intake submitted & auto-approved",
             detail=f"{payload.project_name} · {org} — AI recommendation & workflow unlocked",
@@ -139,7 +146,7 @@ async def submit_intake(payload: IntakePayload, db: AsyncSession = Depends(get_d
             kind="intake",
             from_role="Tenant Admin",
             to_role="Provider Admin",
-            from_name=payload.submitted_by or "Tenant Admin",
+            from_name=submitter_name,
             to_name="Provider Admin",
             message="Project Intake submitted by Tenant Admin — awaiting Provider Admin approval",
             detail=f"{payload.project_name} · {org} — Requires Provider Admin sign-off before Stage 2",
@@ -152,9 +159,9 @@ async def submit_intake(payload: IntakePayload, db: AsyncSession = Depends(get_d
             kind="intake",
             from_role="Tenant User",
             to_role="Tenant Admin",
-            from_name=payload.submitted_by or "Tenant User",
+            from_name=submitter_name,
             to_name=payload.tenant_admin_name or "Tenant Admin",
-            message="Project Intake submitted by Tenant User — awaiting Tenant Admin approval",
+            message=f"Project Intake submitted by Tenant User {submitter_name} — awaiting Tenant Admin approval",
             detail=f"{payload.project_name} · {org} — Awaiting Tenant Admin approval before forwarding to Provider Admin",
             tenant_id=payload.tenant_id,
             unread=True,

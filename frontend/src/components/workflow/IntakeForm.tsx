@@ -172,6 +172,7 @@ export default function IntakeForm() {
   const [compliance, setCompliance] = useState('HIPAA');
   const [budgetCeiling, setBudgetCeiling] = useState(2000);
   const [tenantId, setTenantId] = useState('');
+  const [tenantUserId, setTenantUserId] = useState('');
   const [description, setDescription] = useState(
     'HIPAA-compliant LLM assistant with pgvector semantic search, 500 concurrent users...',
   );
@@ -201,6 +202,29 @@ export default function IntakeForm() {
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [tenantOptions, apiTenants]);
+
+  const tenantUsersForSelectedTenant = useMemo(() => {
+    if (!tenantId) return [];
+    const selectedTenantObj = allTenantOptions.find((t) => t.id === tenantId);
+    const orgNameLower = selectedTenantObj?.name?.trim().toLowerCase();
+
+    return (invitedUsers || []).filter((u) => {
+      if (u.role !== 'TENANT_USER' || u.archived || u.decommissioned) return false;
+      if (u.tenantId && u.tenantId === tenantId) return true;
+      const uCompany = (u.companyName || (u.intakeData as any)?.org_name || '').trim().toLowerCase();
+      return orgNameLower && uCompany === orgNameLower;
+    });
+  }, [invitedUsers, tenantId, allTenantOptions]);
+
+  useEffect(() => {
+    if (tenantUsersForSelectedTenant.length > 0) {
+      if (!tenantUserId || !tenantUsersForSelectedTenant.some((u) => u.inviteId === tenantUserId)) {
+        setTenantUserId(tenantUsersForSelectedTenant[0].inviteId);
+      }
+    } else {
+      setTenantUserId('');
+    }
+  }, [tenantUsersForSelectedTenant, tenantUserId]);
 
   useEffect(() => {
     if (!tenantId && activeTenant?.tenantId) {
@@ -317,6 +341,19 @@ export default function IntakeForm() {
       return;
     }
 
+    const selectedTenantUser = tenantUsersForSelectedTenant.find((u) => u.inviteId === tenantUserId);
+    if (submitterRole === 'Tenant User' && tenantUsersForSelectedTenant.length > 0 && !selectedTenantUser) {
+      setError('Select a registered Tenant User applicant for this intake form.');
+      return;
+    }
+
+    const finalSubmittedBy = submitterRole === 'Tenant User' && selectedTenantUser
+      ? selectedTenantUser.fullName
+      : submitterRole;
+    const finalSubmittedByEmail = submitterRole === 'Tenant User' && selectedTenantUser
+      ? selectedTenantUser.email
+      : undefined;
+
     setLoading(true);
     try {
       const res = await workflowApi.submitIntake({
@@ -328,8 +365,10 @@ export default function IntakeForm() {
         compliance,
         budget_ceiling: Number(budgetCeiling) || 2000,
         description: description.trim(),
-        submitted_by: submitterRole,
+        submitted_by: finalSubmittedBy,
         submitted_by_role: submitterRole,
+        submitted_by_email: finalSubmittedByEmail,
+        tenant_user_id: tenantUserId || undefined,
         tenant_admin_name: 'Tenant Admin',
       });
       const mapped = mapIntake(res.data);
@@ -599,7 +638,7 @@ export default function IntakeForm() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 14, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 14 }}>
           <div>
             <label style={labelStyle}>Budget ceiling ($/mo)</label>
             <input
@@ -612,7 +651,7 @@ export default function IntakeForm() {
             />
           </div>
           <div>
-            <label style={labelStyle}>Tenant scope</label>
+            <label style={labelStyle}>Tenant scope *</label>
             <select
               style={inputStyle}
               value={tenantId}
@@ -623,6 +662,28 @@ export default function IntakeForm() {
               <option value="">Select tenant…</option>
               {allTenantOptions.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>
+              Tenant User {submitterRole === 'Tenant User' ? '*' : '(Optional)'}
+            </label>
+            <select
+              style={inputStyle}
+              value={tenantUserId}
+              onChange={(e) => setTenantUserId(e.target.value)}
+              disabled={!canSubmit || loading}
+            >
+              <option value="">
+                {tenantUsersForSelectedTenant.length > 0
+                  ? 'Select Tenant User…'
+                  : 'No Tenant Users registered under tenant'}
+              </option>
+              {tenantUsersForSelectedTenant.map((u) => (
+                <option key={u.inviteId} value={u.inviteId}>
+                  {u.fullName} ({u.email})
+                </option>
               ))}
             </select>
           </div>
