@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     APP_SECRET_KEY: str = "dev-secret-change-in-production"
     CORS_ORIGINS: List[str] = [
+        "*",
         "http://localhost:3000",
         "http://localhost:3050",
         "http://localhost:3177",
