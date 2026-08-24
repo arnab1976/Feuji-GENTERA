@@ -14,11 +14,26 @@ from app.middleware.logging import LoggingMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup — connect to DATABASE_URL (must be Neon/cloud on Render, not localhost)
     try:
+        from urllib.parse import urlparse
+        raw = settings.async_database_url
+        parsed = urlparse(raw.replace("postgresql+asyncpg://", "postgresql://", 1))
+        host = parsed.hostname or "?"
+        print(f"[feuji] Connecting to database host={host} port={parsed.port or 5432} ...")
+        if host in ("localhost", "127.0.0.1", "postgres"):
+            print(
+                "[feuji] WARNING: DATABASE_URL points at a local Docker host. "
+                "On Render set Environment → DATABASE_URL to your Neon connection string."
+            )
         await init_db()
+        print(f"[feuji] Database ready (host={host})")
     except Exception as e:
         print(f"Warning: Database initialization skipped ({e}). Running in API standalone mode.")
+        print(
+            "[feuji] Fix: Render Dashboard → Environment → set DATABASE_URL to Neon "
+            "(postgresql://...@....neon.tech/...?sslmode=require). Then Manual Deploy → Clear build cache & deploy."
+        )
     yield
     # Shutdown — cleanup if needed
 
