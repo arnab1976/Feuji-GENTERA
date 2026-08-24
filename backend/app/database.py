@@ -2,19 +2,21 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 from app.config import settings
 
-# Smaller pool for Render free / Neon serverless; avoid exhausting connections on boot
-_pool_size = 5 if settings.APP_ENV == "production" else 10
-_max_overflow = 5 if settings.APP_ENV == "production" else 20
+# Neon serverless + Render free: NullPool avoids stale pooled connections
+_engine_kwargs = {
+    "echo": settings.APP_ENV == "development",
+    "pool_pre_ping": True,
+}
+if settings.APP_ENV == "production" or "neon.tech" in (settings.DATABASE_URL or "").lower():
+    _engine_kwargs["poolclass"] = NullPool
+else:
+    _engine_kwargs["pool_size"] = 10
+    _engine_kwargs["max_overflow"] = 20
 
-engine = create_async_engine(
-    settings.async_database_url,
-    echo=settings.APP_ENV == "development",
-    pool_pre_ping=True,
-    pool_size=_pool_size,
-    max_overflow=_max_overflow,
-)
+engine = create_async_engine(settings.async_database_url, **_engine_kwargs)
 
 AsyncSessionLocal = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
@@ -27,14 +29,11 @@ class Base(DeclarativeBase):
 
 async def init_db():
     """Create all tables on startup."""
-    # Register models on Base.metadata before create_all
     import app.models  # noqa: F401
 
     async with engine.begin() as conn:
-        # Enable pgvector extension (SQLAlchemy 2 requires text())
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
-        # Additive columns for invitation archive / decommission (create_all won't alter)
         await conn.execute(text(
             "ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE"
         ))
@@ -68,7 +67,6 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS last_review_decision VARCHAR(20) NULL"
         ))
-        # Project Intake — approval workflow columns (create_all won't alter existing tables)
         await conn.execute(text(
             "ALTER TABLE intake_forms ADD COLUMN IF NOT EXISTS submitted_by VARCHAR(200) NULL"
         ))
@@ -99,7 +97,6 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE intake_forms ADD COLUMN IF NOT EXISTS tenant_user_name VARCHAR(200) NULL"
         ))
-        # Extend tenant primary_cloud enum with GCP (Postgres 15+)
         try:
             await conn.execute(text("ALTER TYPE cloud_enum ADD VALUE IF NOT EXISTS 'gcp'"))
         except Exception:

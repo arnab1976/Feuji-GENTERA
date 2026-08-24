@@ -1,22 +1,23 @@
-# Render Blueprint — Web Service (backend)
-# Docs: https://render.com/docs/blueprint-spec
+# Render Blueprint — backend API
+# Dashboard: set Dockerfile Path = ./Dockerfile, clear Start Command override
 services:
   - type: web
     name: Feuji-GENTERA
     runtime: docker
     plan: free
+    region: oregon
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
     envVars:
       - key: APP_ENV
         value: production
-      - key: PYTHONPATH
-        value: /app
+      - key: PYTHONUNBUFFERED
+        value: "1"
       - key: APP_SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        sync: false
+        value: "*"
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
