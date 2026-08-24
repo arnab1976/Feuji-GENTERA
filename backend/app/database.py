@@ -4,12 +4,16 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
+# Smaller pool for Render free / Neon serverless; avoid exhausting connections on boot
+_pool_size = 5 if settings.APP_ENV == "production" else 10
+_max_overflow = 5 if settings.APP_ENV == "production" else 20
+
 engine = create_async_engine(
     settings.async_database_url,
     echo=settings.APP_ENV == "development",
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=_pool_size,
+    max_overflow=_max_overflow,
 )
 
 AsyncSessionLocal = async_sessionmaker(

@@ -1,13 +1,24 @@
 """Application configuration — reads from environment variables."""
-from pydantic_settings import BaseSettings
-from typing import List
+from __future__ import annotations
+
+from typing import List, Union
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
     # App
     APP_ENV: str = "development"
     APP_SECRET_KEY: str = "dev-secret-change-in-production"
-    CORS_ORIGINS: List[str] = [
+    # Accept JSON list, comma-separated string, or "*" from Render / Vercel env
+    CORS_ORIGINS: Union[List[str], str] = [
         "*",
         "http://localhost:3000",
         "http://localhost:3050",
@@ -42,18 +53,54 @@ class Settings(BaseSettings):
     # OPTIMA-AI
     OPTIMA_SCAN_INTERVAL_MINUTES: int = 60
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-        extra = "ignore"
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if v is None or v == "":
+            return ["*"]
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            s = v.strip()
+            if s.startswith("["):
+                import json
+                try:
+                    return json.loads(s)
+                except Exception:
+                    pass
+            if s == "*":
+                return ["*"]
+            return [part.strip() for part in s.split(",") if part.strip()]
+        return v
+
+    @property
+    def cors_allow_origins(self) -> List[str]:
+        origins = self.CORS_ORIGINS
+        if isinstance(origins, str):
+            origins = [origins]
+        return origins or ["*"]
+
+    @property
+    def cors_allow_credentials(self) -> bool:
+        # Starlette forbids allow_credentials=True together with allow_origins=["*"]
+        return "*" not in self.cors_allow_origins
 
     @property
     def async_database_url(self) -> str:
-        url = self.DATABASE_URL
+        """Normalize provider URLs (Neon/Render) for SQLAlchemy asyncpg."""
+        url = (self.DATABASE_URL or "").strip()
         if url.startswith("postgres://"):
-            return url.replace("postgres://", "postgresql+asyncpg://", 1)
-        if url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
-            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            url = "postgresql+asyncpg://" + url[len("postgres://"):]
+        elif url.startswith("postgresql://") and not url.startswith("postgresql+asyncpg://"):
+            url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+
+        # Neon / managed Postgres require TLS; asyncpg uses ssl=true query param
+        lower = url.lower()
+        if "neon.tech" in lower or "sslmode=require" in lower:
+            if "ssl=" not in lower and "sslmode=" not in lower:
+                url += ("&" if "?" in url else "?") + "ssl=true"
+            # asyncpg does not use sslmode=; map common Neon query to ssl=true
+            url = url.replace("sslmode=require", "ssl=true").replace("sslmode=required", "ssl=true")
         return url
 
 

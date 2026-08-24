@@ -13,10 +13,12 @@ WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Backend package only — avoids repo-root main.py colliding with uvicorn main:app
 COPY backend/ /app/
 
 ENV PYTHONPATH="/app"
 ENV PORT=8050
 EXPOSE 8050
 
+# Render injects PORT; health check hits /health
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8050}"]
