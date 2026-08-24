@@ -9,9 +9,17 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
+COPY . /app/
+
+ENV PYTHONPATH="/app:/app/backend:${PYTHONPATH}"
 ENV PORT=8050
+
+RUN if [ -f "/app/requirements.txt" ]; then pip install --no-cache-dir -r /app/requirements.txt; \
+    elif [ -f "/app/backend/requirements.txt" ]; then pip install --no-cache-dir -r /app/backend/requirements.txt; fi
+
+RUN if [ -d "/app/backend" ] && [ -f "/app/backend/main.py" ]; then cp -rn /app/backend/* /app/; fi
+
 EXPOSE 8050
+
 CMD sh -c "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8050}"

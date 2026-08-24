@@ -13,8 +13,9 @@ WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/ .
+COPY backend/ /app/
 
+ENV PYTHONPATH="/app:${PYTHONPATH}"
 ENV PORT=8050
 EXPOSE 8050
 
