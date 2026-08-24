@@ -530,6 +530,7 @@ export default function RegisterTenantAdminModal({
             {field('Primary cloud', false, selectInput(primaryCloud, setPrimaryCloud, [
               { value: 'azure', label: 'Azure' },
               { value: 'aws', label: 'AWS' },
+              { value: 'gcp', label: 'GCP' },
             ], 'primary_cloud'), 'primary_cloud')}
             {field('Compliance', false, selectInput(compliance, setCompliance, [
               { value: 'HIPAA', label: 'HIPAA' },

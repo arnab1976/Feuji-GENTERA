@@ -1,8 +1,8 @@
 /**
  * Cross-Role Activity Feed — live events from PostgreSQL.
- * Sourced from Provider Admin / Provider User / Tenant Admin / Tenant User actions.
+ * Provider Admin can multi-select items and bulk-delete them.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/appStore';
 import { activityApi } from '@/services/api';
 import { ROLE_META, type PortalRole } from '@/lib/rbac';
@@ -73,14 +73,17 @@ function mapEvent(d: any): ActivityEvent {
 
 export default function ActivityFeed() {
   const { currentRole } = useAppStore();
+  const canDelete = currentRole === 'Provider Admin';
   const [feed, setFeed] = useState<ActivityEvent[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [notifTitle, setNotifTitle] = useState('');
   const [notifBody, setNotifBody] = useState('');
   const [notifTo, setNotifTo] = useState<PortalRole>('Provider User');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -88,8 +91,13 @@ export default function ActivityFeed() {
     try {
       const res = await activityApi.list(100);
       const data = res.data || {};
-      setFeed((data.events || []).map(mapEvent));
+      const events = (data.events || []).map(mapEvent);
+      setFeed(events);
       setUnreadCount(Number(data.unreadCount || 0));
+      setSelectedIds((prev) => {
+        const live = new Set(events.map((e: ActivityEvent) => e.id));
+        return new Set([...prev].filter((id) => live.has(id)));
+      });
     } catch {
       setError('Could not load activity feed from PostgreSQL. Ensure the backend is running.');
       setFeed([]);
@@ -104,6 +112,59 @@ export default function ActivityFeed() {
     const t = window.setInterval(() => { void refresh(); }, 15000);
     return () => window.clearInterval(t);
   }, [refresh]);
+
+  const allSelected = feed.length > 0 && selectedIds.size === feed.length;
+  const someSelected = selectedIds.size > 0 && selectedIds.size < feed.length;
+  const selectedCount = selectedIds.size;
+
+  const selectModeHint = useMemo(() => (
+    canDelete
+      ? 'Select one or more items, then Delete selected.'
+      : 'Only Provider Admin can select and delete activity items.'
+  ), [canDelete]);
+
+  const toggleOne = (id: string) => {
+    if (!canDelete) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (!canDelete) return;
+    if (allSelected) {
+      setSelectedIds(new Set());
+      return;
+    }
+    setSelectedIds(new Set(feed.map((e) => e.id)));
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const deleteSelected = async () => {
+    if (!canDelete || selectedCount === 0) return;
+    const ok = window.confirm(
+      `Delete ${selectedCount} selected activit${selectedCount === 1 ? 'y' : 'ies'}? This cannot be undone.`,
+    );
+    if (!ok) return;
+
+    setDeleting(true);
+    try {
+      const ids = [...selectedIds];
+      const res = await activityApi.deleteBulk(ids);
+      const deleted = Number(res.data?.deleted ?? ids.length);
+      setToast(`Deleted ${deleted} activit${deleted === 1 ? 'y' : 'ies'} from PostgreSQL.`);
+      setSelectedIds(new Set());
+      await refresh();
+    } catch {
+      setToast('Could not delete selected activity items.');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const markAllRead = async () => {
     try {
@@ -184,7 +245,7 @@ export default function ActivityFeed() {
       }}>
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-          padding: '14px 18px', borderBottom: '1px solid #F1F5F9',
+          padding: '14px 18px', borderBottom: '1px solid #F1F5F9', flexWrap: 'wrap',
         }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A' }}>Activity Feed</div>
@@ -194,9 +255,63 @@ export default function ActivityFeed() {
                 · live from PostgreSQL
                 {loading ? ' · refreshing…' : ''}
               </span>
+              <div style={{ marginTop: 4, fontSize: 11, color: canDelete ? '#7C3AED' : '#94A3B8' }}>
+                {selectModeHint}
+                {selectedCount > 0 ? ` · ${selectedCount} selected` : ''}
+              </div>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {canDelete && (
+              <>
+                <button
+                  type="button"
+                  onClick={toggleSelectAll}
+                  disabled={feed.length === 0}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '7px 12px', fontSize: 12, fontWeight: 600,
+                    color: feed.length === 0 ? '#94A3B8' : '#7C3AED',
+                    background: '#FAF5FF', border: '1px solid #DDD6FE', borderRadius: 8,
+                    cursor: feed.length === 0 ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  <i className={`ti ${allSelected ? 'ti-square-check' : 'ti-select'}`} style={{ fontSize: 14 }} />
+                  {allSelected ? 'Clear all' : 'Select all'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteSelected()}
+                  disabled={selectedCount === 0 || deleting}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '7px 12px', fontSize: 12, fontWeight: 700,
+                    color: selectedCount === 0 ? '#94A3B8' : '#FFFFFF',
+                    background: selectedCount === 0 ? '#F1F5F9' : '#DC2626',
+                    border: `1px solid ${selectedCount === 0 ? '#E2E8F0' : '#DC2626'}`,
+                    borderRadius: 8,
+                    cursor: selectedCount === 0 || deleting ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  <i className="ti ti-trash" style={{ fontSize: 14 }} />
+                  {deleting ? 'Deleting…' : `Delete selected${selectedCount ? ` (${selectedCount})` : ''}`}
+                </button>
+                {selectedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '7px 12px', fontSize: 12, fontWeight: 600,
+                      color: '#475569', background: '#F8FAFC', border: '1px solid #E2E8F0',
+                      borderRadius: 8, cursor: 'pointer',
+                    }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </>
+            )}
             <button
               type="button"
               onClick={() => void refresh()}
@@ -228,6 +343,32 @@ export default function ActivityFeed() {
           </div>
         </div>
 
+        {canDelete && feed.length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '8px 18px', borderBottom: '1px solid #F1F5F9', background: '#FAF5FF',
+            fontSize: 12, color: '#5B21B6', fontWeight: 600,
+          }}>
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={(el) => {
+                if (el) el.indeterminate = someSelected;
+              }}
+              onChange={toggleSelectAll}
+              aria-label="Select all activity items"
+              style={{ width: 16, height: 16, cursor: 'pointer' }}
+            />
+            <span>
+              {allSelected
+                ? 'All items selected'
+                : someSelected
+                  ? `${selectedCount} of ${feed.length} selected`
+                  : 'Select items to delete'}
+            </span>
+          </div>
+        )}
+
         {feed.length === 0 && !loading ? (
           <div style={{ padding: '36px 20px', textAlign: 'center', color: '#94A3B8', fontSize: 13 }}>
             No activity yet. Events appear here when Provider Admin invites users, Provider Users
@@ -238,58 +379,85 @@ export default function ActivityFeed() {
           <div>
             {feed.map((e) => {
               const meta = KIND_META[e.kind] || KIND_META.notification;
+              const checked = selectedIds.has(e.id);
               return (
                 <div
                   key={e.id}
-                  onClick={() => e.unread && void markOneRead(e.id)}
                   style={{
                     display: 'flex', alignItems: 'flex-start', gap: 12,
                     padding: '14px 18px',
                     borderBottom: '1px solid #F1F5F9',
-                    background: e.unread ? (meta.unreadBg || '#F8FAFC') : '#FFFFFF',
-                    borderLeft: e.unread && meta.unreadBorder
-                      ? `3px solid ${meta.unreadBorder}`
-                      : e.unread
-                        ? `3px solid ${meta.color}55`
-                        : '3px solid transparent',
-                    cursor: e.unread ? 'pointer' : 'default',
+                    background: checked
+                      ? '#F5F3FF'
+                      : e.unread ? (meta.unreadBg || '#F8FAFC') : '#FFFFFF',
+                    borderLeft: checked
+                      ? '3px solid #7C3AED'
+                      : e.unread && meta.unreadBorder
+                        ? `3px solid ${meta.unreadBorder}`
+                        : e.unread
+                          ? `3px solid ${meta.color}55`
+                          : '3px solid transparent',
                   }}
                 >
-                  <div style={{
-                    width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-                    background: meta.bg, color: meta.color,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    <i className={`ti ${meta.icon}`} style={{ fontSize: 16 }} />
-                  </div>
+                  {canDelete && (
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(ev) => {
+                        ev.stopPropagation();
+                        toggleOne(e.id);
+                      }}
+                      onClick={(ev) => ev.stopPropagation()}
+                      aria-label={`Select activity ${e.id}`}
+                      style={{
+                        width: 16, height: 16, marginTop: 10, flexShrink: 0, cursor: 'pointer',
+                      }}
+                    />
+                  )}
 
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
-                      <RoleBadge role={String(e.fromRole)} />
-                      <i className="ti ti-arrow-right" style={{ fontSize: 12, color: '#94A3B8' }} />
-                      <RoleBadge role={String(e.toRole)} />
+                  <div
+                    onClick={() => e.unread && void markOneRead(e.id)}
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0,
+                      cursor: e.unread ? 'pointer' : 'default',
+                    }}
+                  >
+                    <div style={{
+                      width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                      background: meta.bg, color: meta.color,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <i className={`ti ${meta.icon}`} style={{ fontSize: 16 }} />
                     </div>
-                    <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.45 }}>
-                      <strong style={{ color: '#0F172A' }}>{e.fromName}</strong>
-                      <span style={{ color: '#94A3B8' }}> → </span>
-                      <span style={{ color: '#475569' }}>{e.toName}</span>
-                      <span style={{ color: '#64748B' }}>: {e.message}</span>
-                    </div>
-                  </div>
 
-                  <div style={{
-                    display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8,
-                    flexShrink: 0, paddingTop: 2,
-                  }}>
-                    <span style={{ fontSize: 11, color: '#94A3B8', whiteSpace: 'nowrap' }}>
-                      {relativeTime(e.createdAt)}
-                    </span>
-                    {e.unread && (
-                      <span style={{
-                        width: 8, height: 8, borderRadius: '50%',
-                        background: e.kind === 'escalation' ? '#EA580C' : '#2563EB',
-                      }} />
-                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                        <RoleBadge role={String(e.fromRole)} />
+                        <i className="ti ti-arrow-right" style={{ fontSize: 12, color: '#94A3B8' }} />
+                        <RoleBadge role={String(e.toRole)} />
+                      </div>
+                      <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.45 }}>
+                        <strong style={{ color: '#0F172A' }}>{e.fromName}</strong>
+                        <span style={{ color: '#94A3B8' }}> → </span>
+                        <span style={{ color: '#475569' }}>{e.toName}</span>
+                        <span style={{ color: '#64748B' }}>: {e.message}</span>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8,
+                      flexShrink: 0, paddingTop: 2,
+                    }}>
+                      <span style={{ fontSize: 11, color: '#94A3B8', whiteSpace: 'nowrap' }}>
+                        {relativeTime(e.createdAt)}
+                      </span>
+                      {e.unread && (
+                        <span style={{
+                          width: 8, height: 8, borderRadius: '50%',
+                          background: e.kind === 'escalation' ? '#EA580C' : '#2563EB',
+                        }} />
+                      )}
+                    </div>
                   </div>
                 </div>
               );

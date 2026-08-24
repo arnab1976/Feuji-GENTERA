@@ -42,6 +42,7 @@ export default function ExecutionEngine() {
 
     setIsExecuting(true);
     setExecutionDone(false);
+    setDeploymentResult(null);
     setProgress(0);
     setLogs([]);
     setCurrentStep(1);
@@ -132,11 +133,18 @@ export default function ExecutionEngine() {
     };
   }, [startExecution]);
 
+  // While terraform logs stream, gradually scroll the page so Tenant User follows live output
   useEffect(() => {
-    if (consoleEndRef.current) {
-      consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    const end = consoleEndRef.current;
+    if (!end) return;
+    const panel = end.parentElement;
+    if (panel && typeof panel.scrollTop === 'number') {
+      panel.scrollTop = panel.scrollHeight;
     }
-  }, [logs]);
+    if (isExecuting) {
+      end.scrollIntoView({ behavior: 'smooth', block: 'end', inline: 'nearest' });
+    }
+  }, [logs, isExecuting]);
 
   const handleProceedOptima = () => {
     setPage('optima-overview');
@@ -160,7 +168,7 @@ export default function ExecutionEngine() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 960 }}>
-      {/* ── BREADCRUMB & HEADER (SNAPSHOT 2) ───────────────────────────────── */}
+      {/* ── BREADCRUMB & HEADER ───────────────────────────────── */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
           <span style={{
@@ -184,7 +192,7 @@ export default function ExecutionEngine() {
         </p>
       </div>
 
-      {/* ── BLUE NOTICE BANNER (SNAPSHOT 2) ────────────────────────────────── */}
+      {/* ── BLUE NOTICE BANNER ────────────────────────────────── */}
       <div style={{
         padding: '12px 18px', background: '#F0F9FF', border: '1px solid #BAE6FD',
         borderRadius: 10, color: '#0369A1', fontSize: 13, fontWeight: 500,
@@ -196,139 +204,31 @@ export default function ExecutionEngine() {
         </span>
       </div>
 
-      {/* ── STATUS SUMMARY CARDS GRID (4 CARDS - SNAPSHOT 2) ──────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-        {/* Card 1: STATUS */}
-        <div style={{
-          background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
-          padding: '14px 18px', boxShadow: '0 1px 3px rgba(15,23,42,0.03)',
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            STATUS
-          </div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-            {executionDone ? 'Complete' : isExecuting ? 'Executing...' : 'Ready'}
-          </div>
-          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
-            Runner: local-process / tf-execution
-          </div>
-        </div>
-
-        {/* Card 2: JOB NAME */}
-        <div style={{
-          background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
-          padding: '14px 18px', boxShadow: '0 1px 3px rgba(15,23,42,0.03)',
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            JOB NAME
-          </div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginTop: 4, fontFamily: 'monospace', wordBreak: 'break-all' }}>
-            {jobName}
-          </div>
-        </div>
-
-        {/* Card 3: DURATION */}
-        <div style={{
-          background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
-          padding: '14px 18px', boxShadow: '0 1px 3px rgba(15,23,42,0.03)',
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            DURATION
-          </div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-            {durationSec}s
-          </div>
-        </div>
-
-        {/* Card 4: RESOURCES */}
-        <div style={{
-          background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
-          padding: '14px 18px', boxShadow: '0 1px 3px rgba(15,23,42,0.03)',
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            RESOURCES
-          </div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
-            34
-          </div>
-        </div>
-      </div>
-
-      {/* ── JUMP BOX LIFECYCLE — 8 STEPS STEPPER (SNAPSHOT 2) ──────────────── */}
-      <div style={{
-        background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14,
-        padding: '18px 20px', boxShadow: '0 2px 6px rgba(15,23,42,0.02)',
-      }}>
-        <div style={{
-          fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase',
-          letterSpacing: '0.08em', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <i className="ti ti-git-commit" style={{ fontSize: 14 }} />
-          JUMP BOX LIFECYCLE — 8 STEPS
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          {lifecycleSteps.map((s, idx) => {
-            const isDone = currentStep > s.step || executionDone;
-            const isActive = currentStep === s.step && isExecuting;
-            return (
-              <div key={s.step} style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: '50%',
-                    background: isDone ? '#DCFCE7' : isActive ? '#DBEAFE' : '#F1F5F9',
-                    border: `2px solid ${isDone ? '#16A34A' : isActive ? '#2563EB' : '#CBD5E1'}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: isDone ? '#16A34A' : isActive ? '#2563EB' : '#94A3B8',
-                    transition: 'all 0.3s ease',
-                  }}>
-                    {isDone ? (
-                      <i className="ti ti-check" style={{ fontSize: 16, fontWeight: 'bold' }} />
-                    ) : isActive ? (
-                      <i className="ti ti-loader spin" style={{ fontSize: 16 }} />
-                    ) : (
-                      <span style={{ fontSize: 11, fontWeight: 700 }}>{s.step}</span>
-                    )}
-                  </div>
-                  <span style={{
-                    fontSize: 10.5, fontWeight: isActive || isDone ? 700 : 500,
-                    color: isDone ? '#16A34A' : isActive ? '#2563EB' : '#64748B',
-                    textAlign: 'center', maxWidth: 85, lineHeight: 1.2,
-                  }}>
-                    {s.label}
-                  </span>
-                </div>
-
-                {idx < lifecycleSteps.length - 1 && (
-                  <div style={{
-                    flex: 1, height: 2, margin: '0 6px', marginTop: -18,
-                    background: isDone ? '#16A34A' : '#E2E8F0',
-                    transition: 'background 0.3s ease',
-                  }} />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── LIVE TERRAFORM LOG STREAM CONSOLE (SNAPSHOT 2) ─────────────────── */}
+      {/* ── LIVE TERRAFORM LOG STREAM FIRST (page stays at top; user scrolls if needed) ── */}
       <div style={{
         background: '#0B1329', border: '1px solid #1E293B', borderRadius: 14, overflow: 'hidden',
         boxShadow: '0 8px 30px rgba(0,0,0,0.4)',
       }}>
-        {/* Terminal Header */}
         <div style={{
           background: '#0F172A', padding: '12px 18px', borderBottom: '1px solid #1E293B',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              width: 10, height: 10, borderRadius: '50%',
+              background: isExecuting ? '#10B981' : executionDone ? '#3B82F6' : '#94A3B8',
+              boxShadow: isExecuting ? '0 0 10px #10B981' : 'none',
+              display: 'inline-block',
+            }} />
             <span style={{ fontSize: 13, fontWeight: 700, color: '#38BDF8', fontFamily: 'monospace' }}>
               &gt;_ LIVE TERRAFORM LOG STREAM
             </span>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 11, fontFamily: 'monospace', color: isExecuting ? '#34D399' : '#94A3B8' }}>
+              {isExecuting ? `[ STREAMING · ${progress}% ]` : executionDone ? '[ COMPLETED ]' : '[ READY ]'}
+            </span>
             <button
               type="button"
               onClick={startExecution}
@@ -344,7 +244,6 @@ export default function ExecutionEngine() {
           </div>
         </div>
 
-        {/* Progress Bar */}
         <div style={{ width: '100%', height: 3, background: '#1E293B' }}>
           <div style={{
             height: '100%', width: `${progress}%`,
@@ -353,9 +252,9 @@ export default function ExecutionEngine() {
           }} />
         </div>
 
-        {/* Terminal Log Output Window */}
         <div style={{
-          padding: '16px 20px', height: 280, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12.5,
+          padding: '16px 20px', minHeight: 200, maxHeight: 320, overflowY: 'auto',
+          fontFamily: 'monospace', fontSize: 12.5,
           color: '#E2E8F0', lineHeight: 1.65, background: '#0B1329',
         }}>
           {logs.map((logLine, index) => {
@@ -371,11 +270,128 @@ export default function ExecutionEngine() {
               </div>
             );
           })}
+          {isExecuting && (
+            <div style={{ color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+              <i className="ti ti-loader spin" />
+              <span>Streaming terraform apply logs for {tenantId}...</span>
+            </div>
+          )}
           <div ref={consoleEndRef} />
+        </div>
+        {isExecuting && (
+          <div style={{
+            padding: '10px 18px', borderTop: '1px solid #1E293B', background: '#0F172A',
+            fontSize: 11, color: '#94A3B8',
+          }}>
+            Generated Infrastructure Endpoints (outputs.json) appear below when the stream completes — scroll down to review.
+          </div>
+        )}
+      </div>
+
+      {/* ── After stream ready: status, lifecycle, outputs.json, CTAs ── */}
+      {executionDone && (
+        <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+        <div style={{
+          background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
+          padding: '14px 18px', boxShadow: '0 1px 3px rgba(15,23,42,0.03)',
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            STATUS
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
+            Complete
+          </div>
+          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
+            Runner: local-process / tf-execution
+          </div>
+        </div>
+
+        <div style={{
+          background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
+          padding: '14px 18px', boxShadow: '0 1px 3px rgba(15,23,42,0.03)',
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            JOB NAME
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginTop: 4, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+            {jobName}
+          </div>
+        </div>
+
+        <div style={{
+          background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
+          padding: '14px 18px', boxShadow: '0 1px 3px rgba(15,23,42,0.03)',
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            DURATION
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
+            {durationSec}s
+          </div>
+        </div>
+
+        <div style={{
+          background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
+          padding: '14px 18px', boxShadow: '0 1px 3px rgba(15,23,42,0.03)',
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            RESOURCES
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginTop: 4 }}>
+            34
+          </div>
         </div>
       </div>
 
-      {/* ── DEPLOYMENT OUTPUTS CARD (OUTPUTS.JSON) ─────────────────────────── */}
+      <div style={{
+        background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14,
+        padding: '18px 20px', boxShadow: '0 2px 6px rgba(15,23,42,0.02)',
+      }}>
+        <div style={{
+          fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase',
+          letterSpacing: '0.08em', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <i className="ti ti-git-commit" style={{ fontSize: 14 }} />
+          JUMP BOX LIFECYCLE — 8 STEPS
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          {lifecycleSteps.map((s, idx) => {
+            const isDone = true;
+            return (
+              <div key={s.step} style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  <div style={{
+                    width: 36, height: 36, borderRadius: '50%',
+                    background: '#DCFCE7',
+                    border: '2px solid #16A34A',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#16A34A',
+                  }}>
+                    <i className="ti ti-check" style={{ fontSize: 16, fontWeight: 'bold' }} />
+                  </div>
+                  <span style={{
+                    fontSize: 10.5, fontWeight: 700,
+                    color: '#16A34A',
+                    textAlign: 'center', maxWidth: 85, lineHeight: 1.2,
+                  }}>
+                    {s.label}
+                  </span>
+                </div>
+
+                {idx < lifecycleSteps.length - 1 && (
+                  <div style={{
+                    flex: 1, height: 2, margin: '0 6px', marginTop: -18,
+                    background: '#16A34A',
+                  }} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {deploymentResult && (
         <div style={{
           background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: '18px 20px',
@@ -427,20 +443,18 @@ export default function ExecutionEngine() {
         </div>
       )}
 
-      {/* ── ACTION NAVIGATION CTA ─────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 4, flexWrap: 'wrap' }}>
         <button
           type="button"
           onClick={handleProceedHealth}
-          disabled={isExecuting}
           style={{
             fontSize: 14, fontWeight: 700, color: '#FFFFFF',
-            background: isExecuting ? '#94A3B8' : '#0D9488', border: 'none', borderRadius: 10, padding: '14px 28px',
-            cursor: isExecuting ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10,
-            boxShadow: isExecuting ? 'none' : '0 4px 14px rgba(13, 148, 136, 0.35)', transition: 'all 0.15s ease',
+            background: '#0D9488', border: 'none', borderRadius: 10, padding: '14px 28px',
+            cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10,
+            boxShadow: '0 4px 14px rgba(13, 148, 136, 0.35)', transition: 'all 0.15s ease',
           }}
-          onMouseEnter={(e) => { if (!isExecuting) e.currentTarget.style.background = '#0F766E'; }}
-          onMouseLeave={(e) => { if (!isExecuting) e.currentTarget.style.background = '#0D9488'; }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = '#0F766E'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = '#0D9488'; }}
         >
           <span>Proceed with Phase 1 Health Dashboard</span>
           <i className="ti ti-arrow-right" style={{ fontSize: 18 }} />
@@ -449,20 +463,21 @@ export default function ExecutionEngine() {
         <button
           type="button"
           onClick={handleProceedOptima}
-          disabled={isExecuting}
           style={{
             fontSize: 14, fontWeight: 700, color: '#FFFFFF',
-            background: isExecuting ? '#94A3B8' : '#059669', border: 'none', borderRadius: 10, padding: '14px 28px',
-            cursor: isExecuting ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10,
-            boxShadow: isExecuting ? 'none' : '0 4px 14px rgba(5, 150, 105, 0.35)', transition: 'all 0.15s ease',
+            background: '#059669', border: 'none', borderRadius: 10, padding: '14px 28px',
+            cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10,
+            boxShadow: '0 4px 14px rgba(5, 150, 105, 0.35)', transition: 'all 0.15s ease',
           }}
-          onMouseEnter={(e) => { if (!isExecuting) e.currentTarget.style.background = '#047857'; }}
-          onMouseLeave={(e) => { if (!isExecuting) e.currentTarget.style.background = '#059669'; }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = '#047857'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = '#059669'; }}
         >
           <span>Proceed to Phase 2 (OPTIMA-AI Optimization Engine)</span>
           <i className="ti ti-arrow-right" style={{ fontSize: 18 }} />
         </button>
       </div>
+        </>
+      )}
     </div>
   );
 }

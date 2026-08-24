@@ -244,15 +244,88 @@ export const selectPhase1Complete = (state: AppState) =>
 export const selectCanAccessOptima = (state: AppState) =>
   state.recommendation !== null; // Need at least Stage 2 complete
 
-export const selectOptimaContext = (state: AppState) => ({
-  tenant: state.activeTenant,
-  intake: state.intakeForm,
-  recommendation: state.recommendation,
-  resources: state.recommendation?.resources ?? [],
-  approvedTotal: state.approvedTotal,
-  budgetCeiling: state.intakeForm?.budgetCeiling ?? 2000,
-  cloud: state.intakeForm?.cloud ?? state.activeTenant?.cloud.primary ?? 'azure',
-  compliance: state.intakeForm?.compliance ?? state.activeTenant?.compliance ?? 'HIPAA',
-  outputs: state.deploymentOutputs,
-  deployed: state.deploymentOutputs !== null,
-});
+/** Resolve Phase 1 context for OPTIMA — intake/approval wins over stale activeTenant */
+export const selectOptimaContext = (state: AppState) => {
+  const intake = state.intakeForm;
+  const tenants = state.tenants || [];
+  const matchedTenant = intake?.tenantId
+    ? tenants.find((t) => t.tenantId === intake.tenantId && !t.archived)
+    : null;
+
+  const tenantName = (
+    (intake?.tenantName || '').trim()
+    || matchedTenant?.orgName
+    || (state.activeTenant && intake?.tenantId && state.activeTenant.tenantId === intake.tenantId
+      ? state.activeTenant.orgName
+      : '')
+    || matchedTenant?.orgName
+    || ''
+  ).trim();
+
+  const tenantId =
+    intake?.tenantId
+    || matchedTenant?.tenantId
+    || state.activeTenant?.tenantId
+    || '';
+
+  const resources = state.recommendation?.resources ?? [];
+  const resourceSum = resources.reduce((a, r) => a + (Number(r.monthly_cost) || 0), 0);
+
+  // Prefer Stage 3 approved total, then recommendation total, then sum of Stage 2 resources
+  const approvedFromPlan = Number(state.resourcePlan?.approvedTotal) || 0;
+  const approvedFromStore = Number(state.approvedTotal) || 0;
+  const approvedFromRec = Number(state.recommendation?.totalMonthlyCost) || 0;
+  const approvedTotal =
+    approvedFromStore > 0
+      ? approvedFromStore
+      : approvedFromPlan > 0
+        ? approvedFromPlan
+        : approvedFromRec > 0
+          ? approvedFromRec
+          : resourceSum;
+
+  const tenant: Tenant = {
+    tenantId: tenantId || matchedTenant?.tenantId || state.activeTenant?.tenantId || 'UNKNOWN',
+    providerId: matchedTenant?.providerId || state.activeTenant?.providerId || '',
+    orgName: tenantName || matchedTenant?.orgName || state.activeTenant?.orgName || 'Not registered',
+    contact: matchedTenant?.contact || state.activeTenant?.contact || '',
+    billing: matchedTenant?.billing || state.activeTenant?.billing || { plan: 'PROFESSIONAL', currency: 'USD' },
+    cloud: {
+      primary: (intake?.cloud
+        || matchedTenant?.cloud?.primary
+        || state.activeTenant?.cloud?.primary
+        || 'azure') as 'aws' | 'azure' | 'gcp',
+    },
+    compliance: (intake?.compliance
+      || matchedTenant?.compliance
+      || state.activeTenant?.compliance
+      || 'HIPAA') as 'HIPAA' | 'SOC2' | 'GDPR' | 'None',
+    status: matchedTenant?.status || state.activeTenant?.status || 'ACTIVE',
+    budgetCeiling: intake?.budgetCeiling
+      ?? matchedTenant?.budgetCeiling
+      ?? state.activeTenant?.budgetCeiling
+      ?? 2000,
+    createdAt: matchedTenant?.createdAt || state.activeTenant?.createdAt || '',
+    archived: matchedTenant?.archived ?? state.activeTenant?.archived,
+  };
+
+  return {
+    tenant,
+    tenantName: tenant.orgName,
+    projectName: intake?.project || 'Not submitted',
+    intake,
+    recommendation: state.recommendation,
+    resources,
+    resourcePlan: state.resourcePlan,
+    approvedTotal,
+    budgetCeiling: intake?.budgetCeiling
+      ?? matchedTenant?.budgetCeiling
+      ?? state.activeTenant?.budgetCeiling
+      ?? 2000,
+    cloud: intake?.cloud ?? matchedTenant?.cloud?.primary ?? state.activeTenant?.cloud?.primary ?? 'azure',
+    compliance: intake?.compliance ?? matchedTenant?.compliance ?? state.activeTenant?.compliance ?? 'HIPAA',
+    outputs: state.deploymentOutputs,
+    deployed: state.deploymentOutputs !== null,
+    costApproved: Boolean(state.resourcePlan) || approvedFromStore > 0,
+  };
+};

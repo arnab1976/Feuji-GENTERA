@@ -110,6 +110,11 @@ export interface InvitedUser {
   jobTitle?: string;
   functionArea?: string;
   invitedBy: string;
+  /** Owning Tenant Admin for TENANT_USER (resolved from tenantId / company) */
+  tenantAdmin?: string | null;
+  tenantAdminName?: string | null;
+  tenantAdminEmail?: string | null;
+  tenantAdminId?: string | null;
   invitedAt: string;
   status: 'PENDING' | 'ACCEPTED' | 'APPROVED' | 'ARCHIVED' | 'DECOMMISSIONED';
   summaryLine?: string;
@@ -132,7 +137,7 @@ export interface Tenant {
   orgName: string;
   contact: string;
   billing: { plan: string; currency: string };
-  cloud: { primary: 'aws' | 'azure' };
+  cloud: { primary: 'aws' | 'azure' | 'gcp' };
   compliance: 'HIPAA' | 'SOC2' | 'GDPR' | 'None';
   status: 'ACTIVE' | 'INACTIVE';
   budgetCeiling: number;
@@ -146,7 +151,7 @@ export interface IntakeForm {
   tenantId: string;
   tenantName?: string;
   project: string;
-  cloud: 'aws' | 'azure';
+  cloud: 'aws' | 'azure' | 'gcp';
   appCategory: 'rag' | 'agent' | 'summariser' | 'finetuning';
   environment: 'prod' | 'uat' | 'dev';
   compliance: string;
@@ -155,10 +160,16 @@ export interface IntakeForm {
   status: string;
   submittedBy?: string;
   submittedByRole?: string;
+  tenantUserId?: string | null;
+  tenantUserName?: string | null;
   approvedBy?: string;
   approvedAt?: string | null;
   reviewNotes?: string;
   submittedAt: string;
+  unlockToken?: string | null;
+  unlockTokenExpiresAt?: string | null;
+  unlockTokenValid?: boolean;
+  unlockTokenConsumed?: boolean;
 }
 
 export interface InfraResource {
@@ -253,6 +264,7 @@ export interface SavingsDashboard {
 export type PageId =
   | 'home'
   | 'provider' | 'provider-user' | 'tenant' | 'tenant-user' | 'tenant-admin-portal' | 'rbac' | 'activity-feed'
+  | 'provider-intake' | 'tenant-intake'
   | 'intake' | 'ai' | 'cost' | 'terraform' | 'jumpbox'
   | 'health' | 'audit' | 'testing' | 'launch'
   | 'optima-overview' | 'optima-scan' | 'optima-recs'

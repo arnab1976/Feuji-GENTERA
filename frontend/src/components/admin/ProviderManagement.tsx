@@ -5,14 +5,14 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/appStore';
 import { inviteApi, providerApi, workflowApi } from '@/services/api';
-import type { InvitedUser, Provider, IntakeForm as IntakeFormType } from '@/types';
+import type { InvitedUser, Provider } from '@/types';
 import { canManageProviders } from '@/lib/rbac';
 import InviteUserModal from '@/components/admin/InviteUserModal';
 import InviteListSection from '@/components/admin/InviteListSection';
 import RegisterTenantAdminModal, { type IntakeModalMode } from '@/components/admin/RegisterTenantAdminModal';
 import RegisterProviderUserModal, { type ProviderUserModalMode } from '@/components/admin/RegisterProviderUserModal';
 import RegisterTenantUserModal from '@/components/admin/RegisterTenantUserModal';
-import IntakeReviewModal from '@/components/workflow/IntakeReviewModal';
+import IntakeFormsWindowModal from '@/components/admin/IntakeFormsWindowModal';
 
 function mapInvite(d: any): InvitedUser {
   return {
@@ -97,32 +97,19 @@ export default function ProviderManagement() {
   const [puModalOpen, setPuModalOpen] = useState(false);
   const [tuReviewInvite, setTuReviewInvite] = useState<InvitedUser | null>(null);
 
-  const [providerPendingIntakes, setProviderPendingIntakes] = useState<IntakeFormType[]>([]);
-  const [decidingIntakeId, setDecidingIntakeId] = useState<string | null>(null);
-  const [reviewModalIntake, setReviewModalIntake] = useState<IntakeFormType | null>(null);
+  /** Only Step-2 actionable count — not Waiting for TA */
+  const [paActionableCount, setPaActionableCount] = useState(0);
+  const [intakeFormsOpen, setIntakeFormsOpen] = useState(false);
 
   const refreshProviderIntakes = async () => {
     try {
       const res = await workflowApi.listIntakes();
-      const items = (res.data?.items || []).map((d: any) => ({
-        intakeId: d.intakeId,
-        tenantId: d.tenantId,
-        tenantName: d.tenantName,
-        project: d.project,
-        cloud: d.cloud,
-        appCategory: d.appCategory,
-        environment: d.environment,
-        compliance: d.compliance,
-        budgetCeiling: d.budgetCeiling,
-        description: d.description || '',
-        status: d.status,
-        submittedBy: d.submittedBy,
-        submittedByRole: d.submittedByRole,
-        submittedAt: d.submittedAt,
-      })) as IntakeFormType[];
-      setProviderPendingIntakes(items.filter((q) => q.status === 'pending_provider_approval' || q.status === 'pending_tenant_approval'));
+      const items = (res.data?.items || []) as { status?: string }[];
+      setPaActionableCount(
+        items.filter((q) => q.status === 'pending_provider_approval').length,
+      );
     } catch {
-      setProviderPendingIntakes([]);
+      setPaActionableCount(0);
     }
   };
 
@@ -379,134 +366,37 @@ export default function ProviderManagement() {
         </div>
       )}
 
-      {/* Provider Admin Project Intake Approval Notifications Card */}
-      {providerPendingIntakes.length > 0 && (
+      {/* Open TA Intake Forms — in-app window (not sidebar) */}
+      <div style={{
+        background: paActionableCount > 0 ? '#F5F3FF' : '#F8FAFC',
+        border: `1px solid ${paActionableCount > 0 ? '#DDD6FE' : '#E2E8F0'}`,
+        borderRadius: 12,
+        padding: '12px 16px', marginBottom: 24,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+      }}>
         <div style={{
-          background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 12,
-          padding: '18px 20px', marginBottom: 24, boxShadow: '0 4px 14px rgba(109,40,217,0.06)',
+          fontSize: 13, fontWeight: 600,
+          color: paActionableCount > 0 ? '#5B21B6' : '#475569',
+          display: 'flex', alignItems: 'center', gap: 8,
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#6D28D9', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <i className="ti ti-bell-ringing" style={{ fontSize: 18 }} />
-              <span>Project Intake Approval Notifications (Provider Admin Level Sign-Off)</span>
-            </div>
-            <span style={{
-              fontSize: 11, fontWeight: 700, background: '#EDE9FE', color: '#6D28D9',
-              padding: '4px 10px', borderRadius: 999, border: '1px solid #C4B5FD',
-            }}>
-              {providerPendingIntakes.length} Pending Approval{providerPendingIntakes.length > 1 ? 's' : ''}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {providerPendingIntakes.map((item) => (
-              <div key={item.intakeId} style={{
-                background: '#FFFFFF', border: '1px solid #C4B5FD', borderRadius: 10,
-                padding: '14px 16px', boxShadow: '0 2px 6px rgba(0,0,0,0.02)',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>
-                      {item.project} <span style={{ fontSize: 11, color: '#64748B', fontWeight: 400, fontFamily: 'monospace' }}>({item.intakeId})</span>
-                    </div>
-                    <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>
-                      Tenant: <strong>{item.tenantName || item.tenantId}</strong> · Submitted by: <strong>{item.submittedByRole || item.submittedBy || 'Tenant User'}</strong> · Cloud: <strong>{item.cloud?.toUpperCase()}</strong> · App: <strong>{item.appCategory?.toUpperCase()}</strong> · Budget: <strong>${item.budgetCeiling}/mo</strong>
-                    </div>
-                  </div>
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
-                    background: item.status === 'pending_provider_approval' ? '#EDE9FE' : '#FEF3C7',
-                    color: item.status === 'pending_provider_approval' ? '#6D28D9' : '#B45309',
-                    border: `1px solid ${item.status === 'pending_provider_approval' ? '#DDD6FE' : '#FDE68A'}`,
-                  }}>
-                    {item.status === 'pending_provider_approval' ? 'Pending Provider Sign-Off' : 'Pending with Tenant Admin…'}
-                  </span>
-                </div>
-                {item.description && (
-                  <div style={{
-                    fontSize: 12, color: '#334155', marginTop: 6, fontStyle: 'italic',
-                    background: '#F8FAFC', padding: '8px 12px', borderRadius: 6, border: '1px solid #E2E8F0',
-                  }}>
-                    "{item.description}"
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    disabled={decidingIntakeId === item.intakeId}
-                    onClick={async () => {
-                      setDecidingIntakeId(item.intakeId);
-                      try {
-                        await workflowApi.decideIntake(item.intakeId, {
-                          decision: 'approve',
-                          notes: 'Approved by Provider Admin persona',
-                          actor_role: 'Provider Admin',
-                          actor_name: 'Provider Admin',
-                        });
-                        setMessage({ type: 'success', text: `Intake ${item.intakeId} approved by Provider Admin! Stage 2 AI Recommendation unlocked.` });
-                        await refreshProviderIntakes();
-                      } catch {
-                        setMessage({ type: 'error', text: 'Approval failed.' });
-                      } finally {
-                        setDecidingIntakeId(null);
-                      }
-                    }}
-                    style={{
-                      padding: '8px 16px', background: '#7C3AED', color: '#FFFFFF', border: 'none',
-                      borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                      display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(124,58,237,0.25)',
-                    }}
-                  >
-                    <i className="ti ti-check" />
-                    {decidingIntakeId === item.intakeId ? 'Processing…' : 'Approve → Unlock AI Engine'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setReviewModalIntake(item)}
-                    style={{
-                      padding: '8px 14px', background: '#FFFFFF', color: '#0F172A', border: '1px solid #CBD5E1',
-                      borderRadius: 8, fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                    }}
-                  >
-                    <i className="ti ti-edit" />
-                    View / Edit Form
-                  </button>
-                  <button
-                    type="button"
-                    disabled={decidingIntakeId === item.intakeId}
-                    onClick={async () => {
-                      setDecidingIntakeId(item.intakeId);
-                      try {
-                        await workflowApi.decideIntake(item.intakeId, {
-                          decision: 'reject',
-                          notes: 'Rejected by Provider Admin persona',
-                          actor_role: 'Provider Admin',
-                          actor_name: 'Provider Admin',
-                        });
-                        setMessage({ type: 'success', text: `Intake ${item.intakeId} rejected.` });
-                        await refreshProviderIntakes();
-                      } catch {
-                        setMessage({ type: 'error', text: 'Rejection failed.' });
-                      } finally {
-                        setDecidingIntakeId(null);
-                      }
-                    }}
-                    style={{
-                      padding: '8px 14px', background: '#FFFFFF', color: '#BE123C', border: '1px solid #FECDD3',
-                      borderRadius: 8, fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                    }}
-                  >
-                    <i className="ti ti-x" />
-                    Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+          <i className="ti ti-clipboard-list" />
+          {paActionableCount > 0
+            ? `${paActionableCount} intake${paActionableCount === 1 ? '' : 's'} await Provider Admin Step 2 (AI unlock).`
+            : 'View and approve project intakes in a separate window on this page.'}
         </div>
-      )}
+        <button
+          type="button"
+          onClick={() => setIntakeFormsOpen(true)}
+          style={{
+            padding: '8px 14px', fontSize: 12, fontWeight: 700, color: '#FFFFFF',
+            background: '#7C3AED', border: 'none', borderRadius: 8, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+          }}
+        >
+          <i className="ti ti-external-link" />
+          Open TA Intake Forms
+        </button>
+      </div>
 
       {/* Section 1 Header */}
       <div style={{
@@ -1342,13 +1232,11 @@ export default function ProviderManagement() {
         }}
       />
 
-      <IntakeReviewModal
-        open={Boolean(reviewModalIntake)}
-        intake={reviewModalIntake}
-        actorRole="Provider Admin"
-        onClose={() => setReviewModalIntake(null)}
-        onSuccess={(text) => {
-          setMessage({ type: 'success', text });
+      <IntakeFormsWindowModal
+        open={intakeFormsOpen}
+        portal="provider"
+        onClose={() => {
+          setIntakeFormsOpen(false);
           void refreshProviderIntakes();
         }}
       />

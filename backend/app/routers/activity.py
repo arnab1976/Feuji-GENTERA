@@ -1,8 +1,8 @@
-"""Cross-role Activity Feed — GET /activity, mark read, create notification."""
+"""Cross-role Activity Feed — GET /activity, mark read, create notification, delete."""
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.database import get_db
 from app.models.activity import ActivityEvent
 from app.services.activity_service import log_activity
@@ -19,6 +19,10 @@ class ActivityCreate(BaseModel):
     message: str
     detail: str | None = None
     tenant_id: str | None = None
+
+
+class ActivityBulkDelete(BaseModel):
+    ids: list[str] = Field(default_factory=list, min_length=1)
 
 
 ROLE_LABEL = {
@@ -175,3 +179,24 @@ async def create_activity(payload: ActivityCreate, db: AsyncSession = Depends(ge
     await db.commit()
     await db.refresh(event)
     return event.to_dict()
+
+
+@router.delete("/activity/{event_id}")
+async def delete_activity(event_id: str, db: AsyncSession = Depends(get_db)):
+    event = await db.get(ActivityEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Activity event not found")
+    await db.delete(event)
+    await db.commit()
+    return {"ok": True, "deleted": 1, "ids": [event_id]}
+
+
+@router.post("/activity/delete-bulk")
+async def delete_activity_bulk(payload: ActivityBulkDelete, db: AsyncSession = Depends(get_db)):
+    ids = [i.strip() for i in payload.ids if isinstance(i, str) and i.strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Provide at least one activity id to delete.")
+    result = await db.execute(delete(ActivityEvent).where(ActivityEvent.id.in_(ids)))
+    await db.commit()
+    deleted = int(result.rowcount or 0)
+    return {"ok": True, "deleted": deleted, "ids": ids}

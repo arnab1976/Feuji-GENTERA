@@ -42,6 +42,10 @@ function mapInvite(d: any): InvitedUser {
     jobTitle: d.jobTitle,
     functionArea: d.functionArea,
     invitedBy: d.invitedBy,
+    tenantAdmin: d.tenantAdmin ?? d.tenantAdminName ?? null,
+    tenantAdminName: d.tenantAdminName ?? d.tenantAdmin ?? null,
+    tenantAdminEmail: d.tenantAdminEmail ?? null,
+    tenantAdminId: d.tenantAdminId ?? null,
     invitedAt: d.invitedAt,
     status: d.status,
     summaryLine: d.summaryLine,
@@ -214,7 +218,10 @@ export default function InviteTenantUserFormModal({
         department: department.trim(),
         portfolio_scope: accessScope,
         contribution: description.trim(),
-        invited_by: currentRole === 'Tenant Admin' ? 'Tenant Admin' : (currentRole || 'Tenant Admin'),
+        invited_by: tenantAdmin.fullName || (currentRole === 'Tenant Admin' ? 'Tenant Admin' : (currentRole || 'Tenant Admin')),
+        tenant_admin_name: tenantAdmin.fullName || undefined,
+        tenant_admin_email: tenantAdmin.email || undefined,
+        tenant_admin_invite_id: tenantAdmin.inviteId || undefined,
         // Extra intake fields — backend stores on create for TENANT_USER
         project: project.trim(),
         environment,
@@ -374,6 +381,7 @@ export default function InviteTenantUserFormModal({
               <select style={{ ...inputStyle, cursor: 'pointer' }} value={primaryCloud} onChange={(e) => setPrimaryCloud(e.target.value)}>
                 <option value="azure">Azure</option>
                 <option value="aws">AWS</option>
+                <option value="gcp">GCP</option>
               </select>
             </div>
             <div>

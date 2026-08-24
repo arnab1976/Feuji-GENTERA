@@ -56,6 +56,8 @@ export const activityApi = {
   markRead:   (id: string)  => api.patch(`/activity/${id}/read`),
   markAllRead: ()           => api.patch('/activity/read-all'),
   create:     (data: object) => api.post('/activity', data),
+  delete:     (id: string)  => api.delete(`/activity/${id}`),
+  deleteBulk: (ids: string[]) => api.post('/activity/delete-bulk', { ids }),
 };
 
 export const workflowApi = {
@@ -65,9 +67,12 @@ export const workflowApi = {
   getIntake:       (id: string)   => api.get(`/intake/${id}`),
   deleteIntake:    (id: string)   => api.delete(`/intake/${id}`),
   decideIntake:    (id: string, data: object) => api.patch(`/intake/${id}/approve`, data),
+  verifyUnlockToken: (id: string, token: string) =>
+    api.post(`/intake/${id}/verify-unlock-token`, { token }),
   recommend:       (data: object) => api.post('/ai/recommend', data),
   approveCost:     (data: object) => api.post('/cost/approve', data),
   generateTF:      (data: object) => api.post('/terraform/generate', data),
+  validateTF:      (data: object) => api.post('/terraform/validate', data),
   getArtifact:     (id: string)   => api.get(`/terraform/artifact/${id}`),
   executeTF:       (data: object) => api.post('/jumpbox/execute', data),
   getOutputs:      (tenantId: string) => api.get(`/jumpbox/outputs/${tenantId}`),

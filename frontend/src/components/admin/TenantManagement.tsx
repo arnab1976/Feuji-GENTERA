@@ -1,15 +1,17 @@
 /**
- * Tenant Management — full-width Tenant Admin roster.
- * Click Tenant ID to view saved intake. Provider can edit / review pending TA edits.
- * Invite Tenant User opens the requirement form (PENDING until Provider Admin approves).
+ * Tenant Admin page — layout:
+ * 1) Project Intake Approval Notifications (Tenant Admin Step 1 only)
+ *    After TA approves → "Approved by Tenant Admin" + go to Provider Admin portal
+ * 2) Tenant Admin roster (Invite Tenant User column)
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '@/store/appStore';
-import { inviteApi } from '@/services/api';
+import { inviteApi, workflowApi } from '@/services/api';
 import type { InvitedUser, Tenant } from '@/types';
 import { canMutateAdmin } from '@/lib/rbac';
 import RegisterTenantAdminModal, { type IntakeModalMode } from './RegisterTenantAdminModal';
 import InviteTenantUserFormModal from '@/components/admin/InviteTenantUserFormModal';
+import IntakeFormsWindowModal from '@/components/admin/IntakeFormsWindowModal';
 
 function displayInviteStatus(u: InvitedUser) {
   if (u.hasPendingReview || (u.pendingIntakeData && u.status === 'PENDING')) return 'PENDING';
@@ -76,6 +78,8 @@ export default function TenantManagement() {
   const [modalInvite, setModalInvite] = useState<InvitedUser | null>(null);
   const [modalMode, setModalMode] = useState<IntakeModalMode>('register');
   const [inviteForAdmin, setInviteForAdmin] = useState<InvitedUser | null>(null);
+  const [taActionableCount, setTaActionableCount] = useState(0);
+  const [intakeFormsOpen, setIntakeFormsOpen] = useState(false);
 
   const isProviderAdmin = canMutateAdmin(currentRole);
   const currentProvider = provider
@@ -85,6 +89,18 @@ export default function TenantManagement() {
   const tenantAdmins = invitedUsers.filter(
     (u) => u.role === 'TENANT_ADMIN' && !u.archived && !u.decommissioned,
   );
+
+  const refreshIntakes = useCallback(async () => {
+    try {
+      const res = await workflowApi.listIntakes();
+      const items = (res.data?.items || []) as { status?: string }[];
+      setTaActionableCount(
+        items.filter((q) => q.status === 'pending_tenant_approval').length,
+      );
+    } catch {
+      setTaActionableCount(0);
+    }
+  }, []);
 
   const refreshInvites = async () => {
     setLoadingInvites(true);
@@ -107,7 +123,7 @@ export default function TenantManagement() {
               orgName: intake?.org_name || inv.companyName,
               contact: intake?.contact_email || inv.email,
               billing: { plan: intake?.plan || 'PROFESSIONAL', currency: 'USD' },
-              cloud: { primary: (intake?.primary_cloud as 'aws' | 'azure') || 'azure' },
+              cloud: { primary: (intake?.primary_cloud as 'aws' | 'azure' | 'gcp') || 'azure' },
               compliance: (intake?.compliance as Tenant['compliance']) || 'HIPAA',
               status: isApproved ? 'ACTIVE' : 'INACTIVE',
               budgetCeiling: intake?.budget_ceiling ?? 2000,
@@ -124,10 +140,16 @@ export default function TenantManagement() {
     }
   };
 
+  const refreshAll = async () => {
+    await Promise.all([refreshInvites(), refreshIntakes()]);
+  };
+
   useEffect(() => {
-    refreshInvites();
+    void refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Tenant Admin page — Step 1 only. Unlock AI is on Provider Admin portal. */
 
   const openModal = async (invite: InvitedUser, mode?: IntakeModalMode) => {
     let full = invite;
@@ -164,8 +186,8 @@ export default function TenantManagement() {
     if (updated.tenantId) {
       const tp = tenantPayload || {};
       const intake = (updated.intakeData || {}) as Record<string, unknown>;
-      const cloudPrimary = (tp.cloud as { primary?: 'aws' | 'azure' } | undefined)?.primary
-        ?? (typeof intake.primary_cloud === 'string' ? intake.primary_cloud as 'aws' | 'azure' : undefined)
+      const cloudPrimary = (tp.cloud as { primary?: 'aws' | 'azure' | 'gcp' } | undefined)?.primary
+        ?? (typeof intake.primary_cloud === 'string' ? intake.primary_cloud as 'aws' | 'azure' | 'gcp' : undefined)
         ?? 'azure';
       const t: Tenant = {
         tenantId: (tp.tenantId as string) || updated.tenantId,
@@ -197,30 +219,76 @@ export default function TenantManagement() {
   };
 
   return (
-    <div style={{ minHeight: 420 }}>
+    <div style={{ minHeight: 420, display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {successMsg && (
+        <div style={{
+          padding: '10px 14px', borderRadius: 8, background: '#ECFDF5', color: '#047857',
+          fontSize: 13, fontWeight: 600,
+        }}>
+          {successMsg}
+        </div>
+      )}
+      {loadError && (
+        <div style={{ fontSize: 12, color: '#B91C1C' }}>{loadError}</div>
+      )}
+
+      {/* Open TA Intake Forms — in-app window (not sidebar) */}
+      <div style={{
+        background: taActionableCount > 0 ? '#F0FDFA' : '#F8FAFC',
+        border: `1px solid ${taActionableCount > 0 ? '#99F6E4' : '#E2E8F0'}`,
+        borderRadius: 12,
+        padding: '12px 16px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+      }}>
+        <div style={{
+          fontSize: 13, fontWeight: 600,
+          color: taActionableCount > 0 ? '#0F766E' : '#475569',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <i className="ti ti-clipboard-list" />
+          {taActionableCount > 0
+            ? `${taActionableCount} intake${taActionableCount === 1 ? '' : 's'} await Tenant Admin Step 1.`
+            : 'View and approve project intakes in a separate window on this page.'}
+        </div>
+        <button
+          type="button"
+          onClick={() => setIntakeFormsOpen(true)}
+          style={{
+            padding: '8px 14px', fontSize: 12, fontWeight: 700, color: '#FFFFFF',
+            background: '#0D9488', border: 'none', borderRadius: 8, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+          }}
+        >
+          <i className="ti ti-external-link" />
+          Open TA Intake Forms
+        </button>
+      </div>
+
+      {/* ── 2. Tenant Admin roster ── */}
       <div style={{
         background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
         padding: '18px 20px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 12 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 14, gap: 12,
+        }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A' }}>Tenant Admin roster</div>
-            <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: '#64748B', marginTop: 4, lineHeight: 1.5 }}>
               Registered Tenant Admins from Provider Admin. Click Tenant ID to view details.
               Use <strong>Invite Tenant User</strong> to open the requirement form for that tenant;
               submitted profiles stay <strong>PENDING</strong> until Provider Admin approves.
               Provider:{' '}
-              <code style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                {currentProvider?.name ?? 'none'}
-              </code>
+              <strong>{currentProvider?.name ?? 'none'}</strong>
               {activeTenant ? (
-                <> · Active workspace: <code style={{ fontFamily: 'monospace', fontSize: 11 }}>{activeTenant.orgName}</code></>
+                <> · Active workspace: <strong>{activeTenant.orgName}</strong></>
               ) : null}
             </div>
           </div>
           <button
             type="button"
-            onClick={refreshInvites}
+            onClick={() => void refreshAll()}
             disabled={loadingInvites}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -234,14 +302,6 @@ export default function TenantManagement() {
           </button>
         </div>
 
-        {successMsg && (
-          <div style={{
-            padding: '10px 14px', borderRadius: 8, background: '#ECFDF5', color: '#047857',
-            fontSize: 13, fontWeight: 600, marginBottom: 12,
-          }}>
-            {successMsg}
-          </div>
-        )}
         {pendingReviews.length > 0 && (
           <div style={{
             padding: '10px 14px', borderRadius: 8, background: '#FEF3C7', color: '#92400E',
@@ -249,8 +309,7 @@ export default function TenantManagement() {
           }}>
             <strong>Pending Provider review:</strong>{' '}
             {pendingReviews.map((u) => u.companyName || u.tenantId).join(', ')}.
-            Click Tenant ID or <strong>Edit</strong> to view highlighted changes. Status stays <strong>PENDING</strong> until
-            you choose Reject or <strong>Approved Tenant&apos;s request with notes</strong>.
+            Click Tenant ID or <strong>Edit</strong> to view highlighted changes.
           </div>
         )}
         {decisionNotices.filter((u) => u.lastReviewDecision === 'reject').map((u) => (
@@ -276,34 +335,31 @@ export default function TenantManagement() {
             {u.reviewMessage ? `: ${u.reviewMessage}` : ''}
           </div>
         ))}
-        {loadError && (
-          <div style={{ fontSize: 12, color: '#B91C1C', marginBottom: 10 }}>{loadError}</div>
-        )}
 
         {tenantAdmins.length === 0 ? (
           <div style={{
             padding: '28px 16px', textAlign: 'center', color: '#94A3B8', fontSize: 13,
             border: '1px dashed #E2E8F0', borderRadius: 10, background: '#F8FAFC',
           }}>
-            No Tenant Admins yet. Invite a Tenant Admin from Provider Admin, then use
-            Register Tenant Admin under Tenant Admin Invitations — they appear here after approval.
+            No Tenant Admins yet. Invite a Tenant Admin from Provider Admin, then register them —
+            they appear here after approval.
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <div style={{ border: '1px solid #E2E8F0', borderRadius: 12, overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{
                   background: '#F8FAFC', borderBottom: '1px solid #E2E8F0',
-                  color: '#64748B', fontSize: 11, textTransform: 'uppercase',
+                  color: '#64748B', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
                 }}>
-                  <th style={{ padding: '10px 12px', textAlign: 'left' }}>Tenant ID</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'left' }}>Company</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'left' }}>Admin name</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'left' }}>Email</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'left' }}>Job title</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'left' }}>Status</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'left' }}>Actions</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'left' }}>Invite Tenant User</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Tenant ID</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Company</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Admin name</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Email</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Job title</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Status</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Actions</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Invite Tenant User</th>
                 </tr>
               </thead>
               <tbody>
@@ -316,14 +372,14 @@ export default function TenantManagement() {
                       key={u.inviteId}
                       style={{ borderBottom: i === tenantAdmins.length - 1 ? 'none' : '1px solid #F1F5F9' }}
                     >
-                      <td style={{ padding: '10px 12px' }}>
+                      <td style={{ padding: '10px 14px' }}>
                         {u.tenantId ? (
                           <button
                             type="button"
                             onClick={() => openModal(u)}
                             style={{
                               background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                              fontFamily: 'monospace', fontSize: 11, color: '#0284C7',
+                              fontFamily: 'monospace', fontSize: 12, color: '#0284C7',
                               fontWeight: 600, textDecoration: 'underline',
                             }}
                             title="View saved registration"
@@ -331,16 +387,16 @@ export default function TenantManagement() {
                             {u.tenantId}
                           </button>
                         ) : (
-                          <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#94A3B8' }}>—</span>
+                          <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#94A3B8' }}>—</span>
                         )}
                       </td>
-                      <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0F172A' }}>
+                      <td style={{ padding: '10px 14px', fontWeight: 700, color: '#0F172A' }}>
                         {u.companyName || '—'}
                       </td>
-                      <td style={{ padding: '10px 12px', color: '#334155' }}>{u.fullName}</td>
-                      <td style={{ padding: '10px 12px', color: '#475569' }}>{u.email}</td>
-                      <td style={{ padding: '10px 12px', color: '#64748B' }}>{u.jobTitle || '—'}</td>
-                      <td style={{ padding: '10px 12px' }}>
+                      <td style={{ padding: '10px 14px', color: '#334155' }}>{u.fullName}</td>
+                      <td style={{ padding: '10px 14px', color: '#475569' }}>{u.email}</td>
+                      <td style={{ padding: '10px 14px', color: '#64748B' }}>{u.jobTitle || '—'}</td>
+                      <td style={{ padding: '10px 14px' }}>
                         <span style={{
                           fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 999,
                           background: badge.background, color: badge.color,
@@ -348,30 +404,28 @@ export default function TenantManagement() {
                           {badge.label}
                         </span>
                       </td>
-                      <td style={{ padding: '10px 12px' }}>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                          {(isApproved || needsReview) && isProviderAdmin ? (
-                            <button
-                              type="button"
-                              onClick={() => openModal(u, needsReview ? 'review' : 'edit')}
-                              style={{
-                                display: 'inline-flex', alignItems: 'center', gap: 6,
-                                padding: '7px 12px', fontSize: 12, fontWeight: 600,
-                                color: '#0F766E', background: '#F0FDFA', border: '1px solid #99F6E4',
-                                borderRadius: 8, cursor: 'pointer', whiteSpace: 'nowrap',
-                              }}
-                            >
-                              <i className="ti ti-edit" style={{ fontSize: 14 }} />
-                              Edit
-                            </button>
-                          ) : needsReview && !isProviderAdmin ? (
-                            <span style={{ fontSize: 12, color: '#B45309', fontWeight: 600 }}>Awaiting Provider</span>
-                          ) : (
-                            <span style={{ fontSize: 12, color: '#94A3B8' }}>—</span>
-                          )}
-                        </div>
+                      <td style={{ padding: '10px 14px' }}>
+                        {(isApproved || needsReview) && isProviderAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => openModal(u, needsReview ? 'review' : 'edit')}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 6,
+                              padding: '7px 12px', fontSize: 12, fontWeight: 600,
+                              color: '#0F766E', background: '#F0FDFA', border: '1px solid #99F6E4',
+                              borderRadius: 8, cursor: 'pointer', whiteSpace: 'nowrap',
+                            }}
+                          >
+                            <i className="ti ti-edit" style={{ fontSize: 14 }} />
+                            Edit
+                          </button>
+                        ) : needsReview && !isProviderAdmin ? (
+                          <span style={{ fontSize: 12, color: '#B45309', fontWeight: 600 }}>Awaiting Provider</span>
+                        ) : (
+                          <span style={{ fontSize: 12, color: '#94A3B8' }}>—</span>
+                        )}
                       </td>
-                      <td style={{ padding: '10px 12px' }}>
+                      <td style={{ padding: '10px 14px' }}>
                         {isApproved ? (
                           <button
                             type="button"
@@ -419,6 +473,15 @@ export default function TenantManagement() {
           setSuccessMsg(text);
           setTimeout(() => setSuccessMsg(null), 8000);
           void refreshInvites();
+        }}
+      />
+
+      <IntakeFormsWindowModal
+        open={intakeFormsOpen}
+        portal="tenant"
+        onClose={() => {
+          setIntakeFormsOpen(false);
+          void refreshIntakes();
         }}
       />
     </div>

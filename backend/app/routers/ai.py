@@ -7,6 +7,7 @@ import json, asyncio, time
 from app.database import get_db
 from app.models.workflow import IntakeForm, AIRecommendation
 from app.services.ai_engine import AIEngine
+from app.routers.intake import _expire_unlock_if_needed
 
 router = APIRouter()
 
@@ -20,17 +21,39 @@ async def generate_recommendation(payload: RecommendRequest, db: AsyncSession = 
     Stage 2: Call LLM (Azure OpenAI or AWS Bedrock) with intake JSON.
     Returns structured infrastructure recommendation across 7 categories.
     NFR: response < 10 seconds.
+    Requires Provider Admin unlock JWT to have been verified by Tenant User (or still in-flight consumed).
     """
     form = await db.get(IntakeForm, payload.intake_id)
     if not form:
         raise HTTPException(status_code=404, detail="Intake form not found")
+
+    if _expire_unlock_if_needed(form):
+        await db.flush()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unlock JWT token expired (5 minutes). "
+                "Tenant Admin and Provider Admin level approval are required again "
+                "before AI recommendation."
+            ),
+        )
+
     if form.status not in ("queued_for_recommendation", "recommendation_ready"):
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Intake status is '{form.status}'. "
-                "Tenant Admin or Provider Admin must approve the Project Intake "
+                "Tenant Admin and Provider Admin must approve the Project Intake "
                 "before AI recommendation, cost estimation, and Terraform generation."
+            ),
+        )
+
+    if not form.unlock_token_consumed_at:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unlock JWT has not been verified yet. "
+                "Enter the 16-character alphanumeric token from Tenant User notifications to Run AI Recommendation Engine."
             ),
         )
 

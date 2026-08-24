@@ -20,7 +20,7 @@ class Tenant(Base):
         default="PROFESSIONAL"
     )
     primary_cloud: Mapped[str] = mapped_column(
-        Enum("aws", "azure", name="cloud_enum"),
+        Enum("aws", "azure", "gcp", name="cloud_enum", create_constraint=False),
         default="azure"
     )
     compliance: Mapped[str] = mapped_column(

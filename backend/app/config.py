@@ -7,7 +7,15 @@ class Settings(BaseSettings):
     # App
     APP_ENV: str = "development"
     APP_SECRET_KEY: str = "dev-secret-change-in-production"
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3050", "http://127.0.0.1:3000", "http://127.0.0.1:3050", "http://localhost:5173"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:3050",
+        "http://localhost:3177",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3050",
+        "http://127.0.0.1:3177",
+        "http://localhost:5173",
+    ]
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://feuji:feuji_pass@localhost:5435/llmkit"

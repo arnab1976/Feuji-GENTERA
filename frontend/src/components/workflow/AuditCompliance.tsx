@@ -1,19 +1,22 @@
 /**
  * Stage 7 — Audit & Compliance Log
- * Pulls real-time events, actors, roles, and timestamps directly from PostgreSQL (activity_events table).
- * Dual-write architecture: PostgreSQL 90-day hot store + Local Store / S3 Object Lock WORM 7-year cold store.
+ * Live events from PostgreSQL activity_events (polled). One-line summary in table;
+ * full detail on hover. Proper absolute timestamps. Rows stream in for viewer UX.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/appStore';
 import { activityApi } from '@/services/api';
 
 interface AuditEventRow {
   id: string;
-  event: string;
+  summary: string;
+  detail: string;
   actor: string;
   role: 'Provider Admin' | 'Tenant Admin' | 'Tenant User' | 'System';
-  time: string;
-  dotColor?: string;
+  timestamp: string;
+  rawIso: string;
+  kind?: string;
+  dotColor: string;
 }
 
 const ROLE_BADGES: Record<string, { bg: string; color: string }> = {
@@ -23,8 +26,7 @@ const ROLE_BADGES: Record<string, { bg: string; color: string }> = {
   'System':         { bg: '#F1F5F9', color: '#475569' },
 };
 
-/** Normalizes role string from PostgreSQL into badge categories */
-const formatRoleBadge = (rStr?: string): 'Provider Admin' | 'Tenant Admin' | 'Tenant User' | 'System' => {
+const formatRoleBadge = (rStr?: string): AuditEventRow['role'] => {
   if (!rStr) return 'System';
   const r = String(rStr).trim();
   if (r === 'Provider Admin' || r === 'PROVIDER_ADMIN' || r === 'Provider User' || r === 'PROVIDER_USER') return 'Provider Admin';
@@ -36,68 +38,81 @@ const formatRoleBadge = (rStr?: string): 'Provider Admin' | 'Tenant Admin' | 'Te
   return 'System';
 };
 
-/**
- * Bulletproof date formatter for PostgreSQL timestamps.
- * Guarantees NO 'Invalid Date' string by appending 'Z' to ISO strings and handling offsets safely.
- */
-const formatEventTime = (rawTime?: string | number): string => {
-  if (!rawTime) return 'Just now';
+/** Absolute timestamp for audit (e.g. 05 Aug 2026, 18:42:11) */
+const formatTimestamp = (rawTime?: string | number): { display: string; iso: string } => {
+  if (!rawTime) {
+    const now = new Date();
+    return { display: now.toLocaleString(), iso: now.toISOString() };
+  }
   try {
     let str = String(rawTime).trim();
-
-    // If ISO date format without timezone offset, append 'Z' for UTC parsing
-    if (str.includes('T') && !str.endsWith('Z') && !str.includes('+') && !str.includes('-')) {
+    if (/^\d{4}-\d{2}-\d{2}T/.test(str) && !str.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(str)) {
       str += 'Z';
     }
-
     let date = new Date(str);
-
-    // Fallback attempt without Z if initial parse failed
+    if (isNaN(date.getTime())) date = new Date(String(rawTime));
     if (isNaN(date.getTime())) {
-      date = new Date(String(rawTime));
+      return { display: String(rawTime), iso: String(rawTime) };
     }
-
-    if (isNaN(date.getTime())) {
-      return 'Just now';
-    }
-
-    const now = new Date();
-    const diffMs = Math.abs(now.getTime() - date.getTime());
-    const diffMin = Math.floor(diffMs / 60000);
-    const diffHr = Math.floor(diffMs / 3600000);
-
-    if (diffMin < 1) return 'Just now';
-    if (diffMin < 60) return `${diffMin}m ago`;
-    if (diffHr < 24) return `${diffHr}h ago`;
-    const diffDays = Math.floor(diffHr / 24);
-    if (diffDays <= 30) return `${diffDays}d ago`;
-
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const display = date.toLocaleString(undefined, {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    return { display, iso: date.toISOString() };
   } catch {
-    return 'Just now';
+    return { display: String(rawTime), iso: String(rawTime) };
   }
 };
 
+/** One-line summary; keep detail for hover */
+const buildSummaryAndDetail = (message?: string, detail?: string, kind?: string): { summary: string; detail: string } => {
+  const msg = (message || '').trim();
+  const det = (detail || '').trim();
+  let summary = msg;
+  if (det && msg.includes(` — ${det}`)) {
+    summary = msg.slice(0, msg.length - (` — ${det}`).length).trim();
+  } else if (msg.includes(' — ')) {
+    summary = msg.split(' — ')[0].trim();
+  }
+  if (!summary) summary = kind ? `${kind} event` : 'Audit event';
+  if (summary.length > 92) summary = `${summary.slice(0, 89)}…`;
+
+  const fullDetail = [msg || summary, det && !msg.includes(det) ? det : '']
+    .filter(Boolean)
+    .join('\n');
+  return { summary, detail: fullDetail || summary };
+};
+
+const dotForRole = (role: AuditEventRow['role']) => {
+  if (role === 'Provider Admin') return '#7C3AED';
+  if (role === 'Tenant Admin') return '#0D9488';
+  if (role === 'Tenant User') return '#16A34A';
+  return '#64748B';
+};
+
 export default function AuditCompliance() {
-  const {
-    activeTenant,
-    intakeForm,
-    recommendation,
-    resourcePlan,
-    deploymentOutputs,
-    markStageComplete,
-    setPage,
-  } = useAppStore();
+  const { markStageComplete, setPage } = useAppStore();
 
   const [apiEvents, setApiEvents] = useState<any[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [feedSig, setFeedSig] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [revealedCount, setRevealedCount] = useState(0);
+  const [streamDone, setStreamDone] = useState(false);
+  const rowEndRef = useRef<HTMLDivElement>(null);
 
-  // Poll backend PostgreSQL activity log
   const fetchPgActivity = async () => {
     try {
       const res = await activityApi.list(100);
-      if (res?.data?.events && Array.isArray(res.data.events)) {
-        setApiEvents(res.data.events);
+      const events = res?.data?.events;
+      if (Array.isArray(events)) {
+        setApiEvents(events);
+        setFeedSig(events.map((e: any) => e.id || e.createdAt || e.message).join('|'));
       }
     } catch (err) {
       console.warn('Failed to fetch PostgreSQL activity logs:', err);
@@ -108,44 +123,77 @@ export default function AuditCompliance() {
 
   useEffect(() => {
     fetchPgActivity();
-    const timer = setInterval(fetchPgActivity, 10000); // 10s polling
+    const timer = setInterval(fetchPgActivity, 10000);
     return () => clearInterval(timer);
   }, []);
+
+  const allRows: AuditEventRow[] = useMemo(() => {
+    return apiEvents.map((e, idx) => {
+      const rawRole = e.fromRole || e.from_role || e.role;
+      const rawName = e.fromName || e.from_name || e.actor;
+      const rawTime = e.createdAt || e.created_at || e.time;
+      const role = formatRoleBadge(rawRole);
+      const toName = e.toName || e.to_name;
+      let actor = rawName || 'System';
+      if (toName && toName !== actor) {
+        actor = `${rawName || 'System'} → ${toName}`;
+      }
+      const { summary, detail } = buildSummaryAndDetail(e.message, e.detail, e.kind);
+      const { display, iso } = formatTimestamp(rawTime);
+      return {
+        id: e.id || `evt-${idx}`,
+        summary,
+        detail,
+        actor,
+        role,
+        timestamp: display,
+        rawIso: iso,
+        kind: e.kind,
+        dotColor: dotForRole(role),
+      };
+    });
+  }, [apiEvents]);
+
+  // Stream table rows in one-by-one when dataset (re)loads
+  useEffect(() => {
+    if (loading) return;
+    setRevealedCount(0);
+    setStreamDone(false);
+    if (allRows.length === 0) {
+      setStreamDone(true);
+      return;
+    }
+    let n = 0;
+    const timer = setInterval(() => {
+      n += 1;
+      setRevealedCount(n);
+      if (n >= allRows.length) {
+        clearInterval(timer);
+        setStreamDone(true);
+      }
+    }, 280);
+    return () => clearInterval(timer);
+  }, [loading, feedSig, allRows.length]);
+
+  useEffect(() => {
+    if (!streamDone && rowEndRef.current) {
+      rowEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end', inline: 'nearest' });
+    }
+  }, [revealedCount, streamDone]);
+
+  const visibleRows = allRows.slice(0, revealedCount);
+  const uniqueKinds = useMemo(
+    () => new Set(allRows.map((r) => r.kind).filter(Boolean)).size || Math.min(24, allRows.length),
+    [allRows],
+  );
 
   const handleContinueTesting = () => {
     markStageComplete('audit');
     setPage('testing');
   };
 
-  const handleBackHealth = () => {
-    setPage('health');
-  };
-
-  // Map PostgreSQL activity events directly from backend API
-  const displayEvents: AuditEventRow[] = apiEvents.map((e, idx) => {
-    const rawRole = e.fromRole || e.from_role || e.role;
-    const rawName = e.fromName || e.from_name || e.actor;
-    const rawTime = e.createdAt || e.created_at || e.time;
-
-    const role = formatRoleBadge(rawRole);
-    let actor = rawName || 'System';
-    if ((actor === 'System' || actor === 'Provider Admin') && e.toName && e.toName !== 'System' && e.toName !== 'AI Engine') {
-      actor = `${rawName || 'System'} → ${e.toName}`;
-    }
-
-    return {
-      id: e.id || String(idx),
-      event: e.message || e.detail || 'Audit Event',
-      actor: actor,
-      role: role,
-      time: formatEventTime(rawTime),
-      dotColor: '#10B981',
-    };
-  });
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 960 }}>
-      {/* ── BREADCRUMB & HEADER (SNAPSHOT) ─────────────────────────────────── */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
           <span style={{
@@ -165,51 +213,51 @@ export default function AuditCompliance() {
           Audit &amp; Compliance Log
         </div>
         <p style={{ fontSize: 13, color: '#64748B', lineHeight: 1.6, marginTop: 6, maxWidth: 880 }}>
-          24 event types captured. Dual-write: PostgreSQL 90-day hot store + Local Store / S3 Object Lock WORM 7-year cold store. HIPAA and SOC2 compliant retention.
+          Live audit trail from PostgreSQL activity events (refreshed every 10s). Dual-write: 90-day hot store + Object Lock WORM cold store.
+          Event column shows a one-line summary — hover a row for full detail.
         </p>
       </div>
 
-      {/* ── AMBER NOTICE BANNER (SNAPSHOT) ─────────────────────────────────── */}
       <div style={{
         padding: '12px 18px', background: '#FEF3C7', border: '1px solid #FDE68A',
-        borderRadius: 10, color: '#D97706', fontSize: 13, fontWeight: 500,
+        borderRadius: 10, color: '#B45309', fontSize: 13, fontWeight: 500,
         display: 'flex', alignItems: 'center', gap: 10,
       }}>
-        <i className="ti ti-alert-triangle" style={{ fontSize: 18, color: '#D97706' }} />
+        <i className="ti ti-alert-triangle" style={{ fontSize: 18 }} />
         <span>
-          Phase 2 implementation: <strong>dual-write architecture</strong> — PostgreSQL 90-day hot store + S3 Object Lock WORM 7-year cold store. 24 event types tracked.
+          {loading
+            ? 'Loading live events from PostgreSQL…'
+            : streamDone
+              ? <>Showing <strong>{allRows.length}</strong> live event{allRows.length === 1 ? '' : 's'} from activity feed. Hover any row for detailed audit context.</>
+              : <>Streaming audit rows… {revealedCount}/{allRows.length}</>}
         </span>
       </div>
 
-      {/* ── 3 SUMMARY METRIC CARDS (SNAPSHOT) ──────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
-        {/* Card 1: Events in sample */}
         <div style={{
           background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
           padding: '16px 20px', boxShadow: '0 1px 3px rgba(15,23,42,0.02)',
         }}>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#0F172A' }}>
-            {displayEvents.length}
+            {allRows.length}
           </div>
           <div style={{ fontSize: 11, fontWeight: 600, color: '#64748B', marginTop: 4 }}>
             Events in sample (from PostgreSQL)
           </div>
         </div>
 
-        {/* Card 2: Event types tracked */}
         <div style={{
           background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
           padding: '16px 20px', boxShadow: '0 1px 3px rgba(15,23,42,0.02)',
         }}>
           <div style={{ fontSize: 24, fontWeight: 800, color: '#0D9488' }}>
-            24
+            {uniqueKinds || 24}
           </div>
           <div style={{ fontSize: 11, fontWeight: 600, color: '#64748B', marginTop: 4 }}>
-            Event types tracked
+            Event types in current feed
           </div>
         </div>
 
-        {/* Card 3: Hot store retention */}
         <div style={{
           background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
           padding: '16px 20px', boxShadow: '0 1px 3px rgba(15,23,42,0.02)',
@@ -223,33 +271,78 @@ export default function AuditCompliance() {
         </div>
       </div>
 
-      {/* ── AUDIT EVENTS TABLE (POSTGRESQL REAL TIME) ───────────────────────── */}
       <div style={{
         background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, overflow: 'hidden',
-        boxShadow: '0 2px 6px rgba(15,23,42,0.02)',
+        boxShadow: '0 2px 6px rgba(15,23,42,0.02)', position: 'relative',
       }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', textAlign: 'left' }}>
               <th style={{ padding: '12px 20px', color: '#64748B', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>EVENT</th>
-              <th style={{ padding: '12px 20px', color: '#64748B', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', width: 220 }}>ACTOR</th>
-              <th style={{ padding: '12px 20px', color: '#64748B', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', width: 140 }}>ROLE</th>
-              <th style={{ padding: '12px 20px', color: '#64748B', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', width: 110, textAlign: 'right' }}>TIME</th>
+              <th style={{ padding: '12px 20px', color: '#64748B', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', width: 200 }}>ACTOR</th>
+              <th style={{ padding: '12px 20px', color: '#64748B', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', width: 130 }}>ROLE</th>
+              <th style={{ padding: '12px 20px', color: '#64748B', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', width: 170, textAlign: 'right' }}>TIMESTAMP</th>
             </tr>
           </thead>
           <tbody>
-            {displayEvents.map((row) => {
+            {loading && (
+              <tr>
+                <td colSpan={4} style={{ padding: '24px', textAlign: 'center', color: '#94A3B8' }}>
+                  <i className="ti ti-loader spin" style={{ marginRight: 8 }} />
+                  Fetching live audit events…
+                </td>
+              </tr>
+            )}
+            {!loading && allRows.length === 0 && (
+              <tr>
+                <td colSpan={4} style={{ padding: '24px', textAlign: 'center', color: '#94A3B8' }}>
+                  No activity events yet. Complete earlier workflow stages to populate the audit log.
+                </td>
+              </tr>
+            )}
+            {visibleRows.map((row) => {
               const roleBadge = ROLE_BADGES[row.role] || { bg: '#F1F5F9', color: '#475569' };
-
+              const hovered = hoveredId === row.id;
               return (
-                <tr key={row.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                  <td style={{ padding: '14px 20px', color: '#0F172A', fontWeight: 600 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <tr
+                  key={row.id}
+                  onMouseEnter={() => setHoveredId(row.id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  style={{
+                    borderBottom: '1px solid #F1F5F9',
+                    background: hovered ? '#FFFBEB' : '#FFFFFF',
+                    transition: 'background 0.15s ease',
+                    position: 'relative',
+                  }}
+                >
+                  <td style={{ padding: '14px 20px', color: '#0F172A', fontWeight: 600, maxWidth: 420, position: 'relative' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                       <span style={{
-                        width: 8, height: 8, borderRadius: '50%',
-                        background: row.dotColor || '#10B981', flexShrink: 0,
+                        width: 8, height: 8, borderRadius: '50%', marginTop: 5,
+                        background: row.dotColor, flexShrink: 0,
                       }} />
-                      <span>{row.event}</span>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          maxWidth: 380,
+                        }}>
+                          {row.summary}
+                        </div>
+                        {hovered && (
+                          <div style={{
+                            position: 'absolute', left: 36, top: '100%', marginTop: 4, zIndex: 20,
+                            maxWidth: 480, padding: '10px 12px', borderRadius: 8,
+                            background: '#0F172A', color: '#F8FAFC', fontSize: 12, fontWeight: 500,
+                            lineHeight: 1.45, whiteSpace: 'pre-wrap',
+                            boxShadow: '0 8px 24px rgba(15,23,42,0.28)',
+                          }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#94A3B8', marginBottom: 4, textTransform: 'uppercase' }}>
+                              Event detail
+                            </div>
+                            {row.detail}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </td>
                   <td style={{ padding: '14px 20px', color: '#475569', fontWeight: 500 }}>
@@ -263,49 +356,63 @@ export default function AuditCompliance() {
                       {row.role}
                     </span>
                   </td>
-                  <td style={{ padding: '14px 20px', color: '#64748B', textAlign: 'right', fontWeight: 600 }}>
-                    {row.time}
+                  <td
+                    style={{ padding: '14px 20px', color: '#334155', textAlign: 'right', fontWeight: 600, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+                    title={row.rawIso}
+                  >
+                    {row.timestamp}
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+        {!streamDone && !loading && allRows.length > 0 && (
+          <div style={{
+            padding: '10px 20px', fontSize: 12, color: '#64748B', background: '#F8FAFC',
+            display: 'flex', alignItems: 'center', gap: 8, borderTop: '1px solid #F1F5F9',
+          }}>
+            <i className="ti ti-loader spin" />
+            Streaming next audit event…
+          </div>
+        )}
+        <div ref={rowEndRef} />
       </div>
 
-      {/* ── ACTION BUTTONS ────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 4 }}>
-        <button
-          type="button"
-          onClick={handleContinueTesting}
-          style={{
-            fontSize: 14, fontWeight: 700, color: '#FFFFFF',
-            background: '#059669', border: 'none', borderRadius: 10, padding: '14px 28px',
-            cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10,
-            boxShadow: '0 4px 14px rgba(5, 150, 105, 0.35)', transition: 'all 0.15s ease',
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = '#047857'}
-          onMouseLeave={(e) => e.currentTarget.style.background = '#059669'}
-        >
-          <span>Continue to Integration Testing &amp; QA (Stage 8)</span>
-          <i className="ti ti-arrow-right" style={{ fontSize: 18 }} />
-        </button>
+      {streamDone && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 4, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={handleContinueTesting}
+            style={{
+              fontSize: 14, fontWeight: 700, color: '#FFFFFF',
+              background: '#059669', border: 'none', borderRadius: 10, padding: '14px 28px',
+              cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10,
+              boxShadow: '0 4px 14px rgba(5, 150, 105, 0.35)', transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#047857'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = '#059669'; }}
+          >
+            <span>Continue to Integration Testing &amp; QA (Stage 8)</span>
+            <i className="ti ti-arrow-right" style={{ fontSize: 18 }} />
+          </button>
 
-        <button
-          type="button"
-          onClick={handleBackHealth}
-          style={{
-            fontSize: 13, fontWeight: 600, color: '#334155',
-            background: '#FFFFFF', border: '1px solid #CBD5E1', borderRadius: 10, padding: '14px 20px',
-            cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8,
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = '#F8FAFC'}
-          onMouseLeave={(e) => e.currentTarget.style.background = '#FFFFFF'}
-        >
-          <i className="ti ti-arrow-left" />
-          <span>Back to Infrastructure Health (Stage 6)</span>
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => setPage('health')}
+            style={{
+              fontSize: 13, fontWeight: 600, color: '#334155',
+              background: '#FFFFFF', border: '1px solid #CBD5E1', borderRadius: 10, padding: '14px 20px',
+              cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#F8FAFC'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = '#FFFFFF'; }}
+          >
+            <i className="ti ti-arrow-left" />
+            <span>Back to Infrastructure Health (Stage 6)</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

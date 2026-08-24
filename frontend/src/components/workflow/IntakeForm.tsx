@@ -43,6 +43,7 @@ const inputStyle: CSSProperties = {
 const CLOUD_OPTIONS = [
   { value: 'azure', label: 'Azure' },
   { value: 'aws', label: 'AWS' },
+  { value: 'gcp', label: 'GCP' },
 ];
 
 const APP_CATEGORY_OPTIONS = [
@@ -75,11 +76,105 @@ function mapIntake(d: any): IntakeFormType {
     status: d.status,
     submittedBy: d.submittedBy,
     submittedByRole: d.submittedByRole,
+    tenantUserId: d.tenantUserId ?? null,
+    tenantUserName: d.tenantUserName ?? null,
     approvedBy: d.approvedBy,
     approvedAt: d.approvedAt,
     reviewNotes: d.reviewNotes,
     submittedAt: d.submittedAt,
+    unlockToken: d.unlockToken ?? null,
+    unlockTokenExpiresAt: d.unlockTokenExpiresAt ?? null,
+    unlockTokenValid: Boolean(d.unlockTokenValid),
+    unlockTokenConsumed: Boolean(d.unlockTokenConsumed),
   };
+}
+
+function formatTokenExpiry(iso?: string | null) {
+  if (!iso) return null;
+  try {
+    const ms = new Date(iso).getTime() - Date.now();
+    if (ms <= 0) return 'expired';
+    const secs = Math.ceil(ms / 1000);
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${String(s).padStart(2, '0')} left`;
+  } catch {
+    return null;
+  }
+}
+
+const UNLOCK_MEMORY_PREFIX = 'gentera_unlock_verified_';
+
+function rememberUnlock(intakeId: string) {
+  try {
+    sessionStorage.setItem(`${UNLOCK_MEMORY_PREFIX}${intakeId}`, '1');
+  } catch { /* ignore */ }
+}
+
+function isUnlockRemembered(intakeId: string) {
+  try {
+    return sessionStorage.getItem(`${UNLOCK_MEMORY_PREFIX}${intakeId}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function hasJourneyUnlocked(item: IntakeFormType) {
+  return Boolean(item.unlockTokenConsumed) || isUnlockRemembered(item.intakeId);
+}
+
+function ViewIntakeButton({
+  onClick,
+  compact = false,
+}: {
+  onClick: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      title="View Intake Form"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        padding: compact ? '4px 10px' : '5px 12px',
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#1D4ED8',
+        background: '#EFF6FF',
+        border: '1px solid #BFDBFE',
+        borderRadius: 7,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      }}
+    >
+      <i className="ti ti-eye" style={{ fontSize: 14 }} />
+      View
+    </button>
+  );
+}
+
+function raisedByLabel(item: IntakeFormType) {
+  const roleLabels = new Set(['Provider Admin', 'Tenant Admin', 'Provider User', 'Tenant User']);
+  const tuName = (item.tenantUserName || '').trim();
+  if (tuName && !roleLabels.has(tuName)) return tuName;
+
+  const name = (item.submittedBy || '').trim();
+  const role = (item.submittedByRole || '').trim();
+  // Prefer real person name when submitter was Tenant User
+  if (role === 'Tenant User' && name && !roleLabels.has(name)) {
+    return name.replace(/\s*\([^)]*@[^)]*\)\s*$/, '').trim() || name;
+  }
+  if (name && !roleLabels.has(name) && !name.startsWith('Provider ') && !name.startsWith('Tenant ')) {
+    return name.replace(/\s*\([^)]*@[^)]*\)\s*$/, '').trim() || name;
+  }
+  return tuName || '—';
 }
 
 function statusBadge(status: string) {
@@ -185,6 +280,11 @@ export default function IntakeForm() {
   const [decidingId, setDecidingId] = useState<string | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [deletedIds, setDeletedIds] = useState<string[]>([]);
+  const [unlockModalItem, setUnlockModalItem] = useState<IntakeFormType | null>(null);
+  const [unlockTokenInput, setUnlockTokenInput] = useState('');
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlockLoading, setUnlockLoading] = useState(false);
+  const [viewIntakeItem, setViewIntakeItem] = useState<IntakeFormType | null>(null);
   const hasInitializedDefault = useRef(false);
 
   const allTenantOptions = useMemo(() => {
@@ -284,6 +384,9 @@ export default function IntakeForm() {
         ];
       }
       setQueue(items);
+      items.forEach((it: IntakeFormType) => {
+        if (it.unlockTokenConsumed) rememberUnlock(it.intakeId);
+      });
     } catch {
       if (!hasInitializedDefault.current) {
         hasInitializedDefault.current = true;
@@ -342,8 +445,8 @@ export default function IntakeForm() {
     }
 
     const selectedTenantUser = tenantUsersForSelectedTenant.find((u) => u.inviteId === tenantUserId);
-    if (submitterRole === 'Tenant User' && tenantUsersForSelectedTenant.length > 0 && !selectedTenantUser) {
-      setError('Select a registered Tenant User applicant for this intake form.');
+    if (tenantUsersForSelectedTenant.length > 0 && !selectedTenantUser) {
+      setError('Select the Tenant User this intake is raised for — their name appears in the roster notification.');
       return;
     }
 
@@ -353,6 +456,8 @@ export default function IntakeForm() {
     const finalSubmittedByEmail = submitterRole === 'Tenant User' && selectedTenantUser
       ? selectedTenantUser.email
       : undefined;
+    const tenantUserName = selectedTenantUser?.fullName
+      || (submitterRole === 'Tenant User' ? finalSubmittedBy : undefined);
 
     setLoading(true);
     try {
@@ -368,7 +473,8 @@ export default function IntakeForm() {
         submitted_by: finalSubmittedBy,
         submitted_by_role: submitterRole,
         submitted_by_email: finalSubmittedByEmail,
-        tenant_user_id: tenantUserId || undefined,
+        tenant_user_id: selectedTenantUser?.inviteId || tenantUserId || undefined,
+        tenant_user_name: tenantUserName,
         tenant_admin_name: 'Tenant Admin',
       });
       const mapped = mapIntake(res.data);
@@ -667,7 +773,10 @@ export default function IntakeForm() {
           </div>
           <div>
             <label style={labelStyle}>
-              Tenant User {submitterRole === 'Tenant User' ? '*' : '(Optional)'}
+              Tenant User *
+              <span style={{ fontWeight: 500, color: '#94A3B8', textTransform: 'none', letterSpacing: 0 }}>
+                {' '}— person shown as Raised by Tenant_User in roster
+              </span>
             </label>
             <select
               style={inputStyle}
@@ -808,18 +917,124 @@ export default function IntakeForm() {
                   <tr key={item.intakeId} style={{ borderBottom: '1px solid #F1F5F9' }}>
                     <td style={{ padding: '14px 14px', color: '#0F172A', fontWeight: 600 }}>
                       <div>{item.project}</div>
-                      <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 400, fontFamily: 'monospace', marginTop: 2 }}>
-                        {item.intakeId}
+                      <div style={{
+                        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 2,
+                      }}>
+                        <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 400, fontFamily: 'monospace' }}>
+                          {item.intakeId}
+                        </div>
+                        {item.status !== 'queued_for_recommendation' && (
+                          <ViewIntakeButton compact onClick={() => setViewIntakeItem(item)} />
+                        )}
                       </div>
-                      {item.reviewNotes && (
+                      {item.status === 'queued_for_recommendation' ? (
                         <div style={{
-                          fontSize: 11, color: item.status === 'rejected' ? '#9F1239' : item.status === 'queued_for_recommendation' ? '#065F46' : '#92400E',
-                          background: item.status === 'rejected' ? '#FFF1F2' : item.status === 'queued_for_recommendation' ? '#ECFDF5' : '#FFFBEB',
-                          border: `1px solid ${item.status === 'rejected' ? '#FECDD3' : item.status === 'queued_for_recommendation' ? '#A7F3D0' : '#FDE68A'}`,
-                          padding: '4px 8px', borderRadius: 6, marginTop: 6, fontWeight: 500, lineHeight: 1.35, maxWidth: 280,
+                          fontSize: 11, color: '#065F46', background: '#ECFDF5', border: '1px solid #A7F3D0',
+                          padding: '10px 12px', borderRadius: 8, marginTop: 6, fontWeight: 500, lineHeight: 1.45,
+                          maxWidth: 420,
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 6 }}>
+                            <i className="ti ti-bell-ringing" style={{ marginTop: 1 }} />
+                            <div>
+                              <strong>Notification:</strong>{' '}
+                              Approved by Provider Admin (Step 2/2) — AI Engine unlocked
+                            </div>
+                          </div>
+                          <div style={{
+                            display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8,
+                            color: '#0F766E', fontWeight: 700,
+                          }}>
+                            <i className="ti ti-user" />
+                            <span>
+                              Raised by Tenant_User:{' '}
+                              <span style={{ color: '#0F172A' }}>{raisedByLabel(item)}</span>
+                            </span>
+                          </div>
+                          {item.submittedByRole && item.submittedByRole !== 'Tenant User' && (
+                            <div style={{ fontSize: 10, color: '#64748B', marginBottom: 6, fontWeight: 500 }}>
+                              Submitted via {item.submittedByRole}
+                            </div>
+                          )}
+                          {hasJourneyUnlocked(item) ? (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                              <div style={{ color: '#047857', flex: '1 1 200px' }}>
+                                Unlock JWT verified — journey started. Token is not required again for this intake.
+                              </div>
+                              <ViewIntakeButton compact onClick={() => setViewIntakeItem(item)} />
+                            </div>
+                          ) : item.unlockTokenValid && item.unlockToken ? (
+                            <>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                <i className="ti ti-key" style={{ color: '#6D28D9' }} />
+                                <span>Unlock JWT (one-time)</span>
+                                <code style={{
+                                  fontSize: 13, letterSpacing: '0.1em', fontWeight: 800, color: '#6D28D9',
+                                  background: '#EDE9FE', padding: '3px 8px', borderRadius: 4,
+                                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                                }}>
+                                  {item.unlockToken}
+                                </code>
+                                <span style={{ color: '#64748B' }}>
+                                  (expires in 5 min
+                                  {(() => {
+                                    const left = formatTokenExpiry(item.unlockTokenExpiresAt);
+                                    return left && left !== 'expired' ? ` · ${left}` : '';
+                                  })()}
+                                  )
+                                </span>
+                                <ViewIntakeButton compact onClick={() => setViewIntakeItem(item)} />
+                              </div>
+                              <div style={{ color: '#475569', fontWeight: 500 }}>
+                                Enter this 16-character token once in the Run AI Recommendation Engine popup.
+                                After verification you will not be asked again for this intake.
+                              </div>
+                            </>
+                          ) : (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                              <div style={{ color: '#92400E', flex: '1 1 200px' }}>
+                                Unlock JWT expired or unavailable. Tenant Admin and Provider Admin approval are required again.
+                              </div>
+                              <ViewIntakeButton compact onClick={() => setViewIntakeItem(item)} />
+                            </div>
+                          )}
+                        </div>
+                      ) : item.reviewNotes && item.status !== 'pending_provider_approval' ? (
+                        <div style={{
+                          fontSize: 11, color: item.status === 'rejected' ? '#9F1239' : '#92400E',
+                          background: item.status === 'rejected' ? '#FFF1F2' : '#FFFBEB',
+                          border: `1px solid ${item.status === 'rejected' ? '#FECDD3' : '#FDE68A'}`,
+                          padding: '4px 8px', borderRadius: 6, marginTop: 6, fontWeight: 500, lineHeight: 1.35, maxWidth: 320,
                         }}>
                           <i className="ti ti-bell-ringing" style={{ marginRight: 4 }} />
                           <strong>Notification:</strong> {item.reviewNotes}
+                          {item.submittedBy && (
+                            <div style={{ marginTop: 4, fontWeight: 700, color: '#0F172A' }}>
+                              Raised by Tenant_User: {raisedByLabel(item)}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                      {item.status === 'pending_provider_approval' && (
+                        <div style={{
+                          fontSize: 11, color: '#92400E', background: '#FFFBEB', border: '1px solid #FDE68A',
+                          padding: '4px 8px', borderRadius: 6, marginTop: 6, fontWeight: 500, lineHeight: 1.35, maxWidth: 320,
+                        }}>
+                          <i className="ti ti-bell-ringing" style={{ marginRight: 4 }} />
+                          <strong>Notification:</strong> It&apos;s require Provider Admin level approval — open Provider Admin portal.
+                          {item.submittedBy && (
+                            <div style={{ marginTop: 4, fontWeight: 700, color: '#0F172A' }}>
+                              Raised by Tenant_User: {raisedByLabel(item)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {item.status === 'pending_tenant_approval' && item.submittedBy && (
+                        <div style={{
+                          fontSize: 11, color: '#92400E', background: '#FFFBEB', border: '1px solid #FDE68A',
+                          padding: '4px 8px', borderRadius: 6, marginTop: 6, fontWeight: 500, lineHeight: 1.35, maxWidth: 320,
+                        }}>
+                          <i className="ti ti-user" style={{ marginRight: 4 }} />
+                          <strong>Raised by Tenant_User:</strong> {raisedByLabel(item)}
                         </div>
                       )}
                     </td>
@@ -837,9 +1052,16 @@ export default function IntakeForm() {
                         <button
                           type="button"
                           onClick={() => {
-                            setIntakeForm(item);
-                            markStageComplete('intake');
-                            setPage('ai');
+                            if (hasJourneyUnlocked(item)) {
+                              rememberUnlock(item.intakeId);
+                              setIntakeForm({ ...item, unlockTokenConsumed: true });
+                              markStageComplete('intake');
+                              setPage('ai');
+                              return;
+                            }
+                            setUnlockModalItem(item);
+                            setUnlockTokenInput('');
+                            setUnlockError(null);
                           }}
                           style={{
                             fontSize: 12, fontWeight: 700, color: '#FFFFFF', background: '#7C3AED',
@@ -851,7 +1073,11 @@ export default function IntakeForm() {
                           onMouseLeave={(e) => (e.currentTarget.style.background = '#7C3AED')}
                         >
                           <i className="ti ti-sparkles" style={{ fontSize: 14 }} />
-                          <span>Run AI Recommendation Engine</span>
+                          <span>
+                            {hasJourneyUnlocked(item)
+                              ? 'Continue AI Recommendation Engine'
+                              : 'Run AI Recommendation Engine'}
+                          </span>
                           <i className="ti ti-arrow-right" style={{ fontSize: 12 }} />
                         </button>
                       ) : item.status === 'pending_tenant_approval' ? (
@@ -866,11 +1092,11 @@ export default function IntakeForm() {
                       ) : item.status === 'pending_provider_approval' ? (
                         <div style={{
                           display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px',
-                          borderRadius: 8, background: '#EDE9FE', border: '1px solid #DDD6FE',
-                          color: '#6D28D9', fontSize: 11, fontWeight: 600,
-                        }} title="Requires Provider Admin approval in Provider Admin portal">
-                          <i className="ti ti-shield-clock" />
-                          <span>Pending with Provider Admin</span>
+                          borderRadius: 8, background: '#D1FAE5', border: '1px solid #A7F3D0',
+                          color: '#047857', fontSize: 11, fontWeight: 600,
+                        }} title="Approved by Tenant Admin — go to Provider Admin portal for Step 2">
+                          <i className="ti ti-circle-check" />
+                          <span>Approved by Tenant Admin</span>
                         </div>
                       ) : (
                         <div style={{
@@ -919,6 +1145,276 @@ export default function IntakeForm() {
           </div>
         )}
       </div>
+
+      {viewIntakeItem && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="view-intake-title"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 10000,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          }}
+          onClick={() => setViewIntakeItem(null)}
+        >
+          <div
+            style={{
+              width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto',
+              background: '#FFFFFF', borderRadius: 16,
+              boxShadow: '0 24px 60px rgba(0,0,0,0.28)', border: '1px solid #E2E8F0',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{
+              padding: '18px 22px 12px', borderBottom: '1px solid #F1F5F9',
+              display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12,
+            }}>
+              <div>
+                <h2 id="view-intake-title" style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0F172A' }}>
+                  View Intake Form
+                </h2>
+                <p style={{ margin: '6px 0 0', fontSize: 12, color: '#64748B' }}>
+                  Read-only view of the generated project intake
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewIntakeItem(null)}
+                aria-label="Close"
+                style={{
+                  width: 32, height: 32, borderRadius: 8, border: '1px solid #E2E8F0',
+                  background: '#F8FAFC', color: '#64748B', cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                <i className="ti ti-x" />
+              </button>
+            </div>
+            <div style={{ padding: '16px 22px 8px', display: 'grid', gap: 12 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                {statusBadge(viewIntakeItem.status)}
+                <code style={{ fontSize: 11, color: '#64748B', fontFamily: 'monospace' }}>
+                  {viewIntakeItem.intakeId}
+                </code>
+              </div>
+              {([
+                ['Project', viewIntakeItem.project],
+                ['Tenant', viewIntakeItem.tenantName || viewIntakeItem.tenantId],
+                ['Raised by Tenant_User', raisedByLabel(viewIntakeItem)],
+                ['Submitted via', viewIntakeItem.submittedByRole || '—'],
+                ['Cloud', (viewIntakeItem.cloud || '—').toString().toUpperCase()],
+                ['App category', (viewIntakeItem.appCategory || '—').toString().toUpperCase()],
+                ['Environment', viewIntakeItem.environment || '—'],
+                ['Compliance', viewIntakeItem.compliance || '—'],
+                ['Budget ceiling', viewIntakeItem.budgetCeiling != null
+                  ? `$${Number(viewIntakeItem.budgetCeiling).toLocaleString()}/mo`
+                  : '—'],
+                ['Submitted at', viewIntakeItem.submittedAt
+                  ? new Date(viewIntakeItem.submittedAt).toLocaleString()
+                  : '—'],
+                ['Approved by', viewIntakeItem.approvedBy || '—'],
+              ] as [string, string][]).map(([label, value]) => (
+                <div key={label}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#64748B', marginBottom: 3 }}>
+                    {label}
+                  </div>
+                  <div style={{
+                    fontSize: 13, fontWeight: 600, color: '#0F172A',
+                    background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8,
+                    padding: '8px 12px',
+                  }}>
+                    {value}
+                  </div>
+                </div>
+              ))}
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#64748B', marginBottom: 3 }}>
+                  Description
+                </div>
+                <div style={{
+                  fontSize: 13, fontWeight: 500, color: '#334155', lineHeight: 1.5,
+                  background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8,
+                  padding: '10px 12px', whiteSpace: 'pre-wrap',
+                }}>
+                  {viewIntakeItem.description || '—'}
+                </div>
+              </div>
+              {viewIntakeItem.reviewNotes && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#64748B', marginBottom: 3 }}>
+                    Review notes
+                  </div>
+                  <div style={{
+                    fontSize: 12, fontWeight: 500, color: '#92400E', lineHeight: 1.45,
+                    background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8,
+                    padding: '10px 12px',
+                  }}>
+                    {viewIntakeItem.reviewNotes}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div style={{
+              padding: '14px 22px', borderTop: '1px solid #F1F5F9',
+              display: 'flex', justifyContent: 'flex-end',
+            }}>
+              <button
+                type="button"
+                onClick={() => setViewIntakeItem(null)}
+                style={{
+                  padding: '8px 16px', fontSize: 12, fontWeight: 700, color: '#FFFFFF',
+                  background: '#1D4ED8', border: 'none', borderRadius: 8, cursor: 'pointer',
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {unlockModalItem && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 10000,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          }}
+          onClick={() => {
+            if (!unlockLoading) setUnlockModalItem(null);
+          }}
+        >
+          <div
+            style={{
+              width: '100%', maxWidth: 440, background: '#FFFFFF', borderRadius: 16,
+              boxShadow: '0 24px 60px rgba(0,0,0,0.28)', border: '1px solid #E2E8F0',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: '18px 22px 12px', borderBottom: '1px solid #F1F5F9' }}>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0F172A' }}>
+                Enter Unlock JWT Token
+              </h2>
+              <p style={{ margin: '8px 0 0', fontSize: 12, color: '#64748B', lineHeight: 1.45 }}>
+                One-time <strong>16-character alphanumeric</strong> unlock JWT for{' '}
+                <strong>{unlockModalItem.project}</strong>
+                {unlockModalItem.submittedBy ? (
+                  <>
+                    {' '}raised by <strong>{raisedByLabel(unlockModalItem)}</strong>
+                  </>
+                ) : null}
+                . Expires in <strong>5 minutes</strong>. After this verification you will not need to enter the token again for this intake journey.
+              </p>
+            </div>
+            <div style={{ padding: '16px 22px', display: 'grid', gap: 12 }}>
+              {unlockModalItem.unlockTokenValid && unlockModalItem.unlockToken && (
+                <div style={{
+                  fontSize: 11, color: '#5B21B6', background: '#F5F3FF', border: '1px solid #DDD6FE',
+                  borderRadius: 8, padding: '8px 10px', lineHeight: 1.4,
+                }}>
+                  Your Tenant User token:{' '}
+                  <code style={{ fontWeight: 800, letterSpacing: '0.1em' }}>{unlockModalItem.unlockToken}</code>
+                  {formatTokenExpiry(unlockModalItem.unlockTokenExpiresAt)
+                    ? ` · ${formatTokenExpiry(unlockModalItem.unlockTokenExpiresAt)}`
+                    : ''}
+                </div>
+              )}
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                  16-character alphanumeric unlock JWT
+                </label>
+                <input
+                  value={unlockTokenInput}
+                  onChange={(e) => setUnlockTokenInput(
+                    e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 16),
+                  )}
+                  placeholder="A1B2C3D4E5F6G7H8"
+                  inputMode="text"
+                  maxLength={16}
+                  autoFocus
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  style={{
+                    width: '100%', padding: '10px 12px', fontSize: 16, letterSpacing: '0.18em',
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                    fontWeight: 700, color: '#0F172A', background: '#F8FAFC',
+                    border: '1px solid #CBD5E1', borderRadius: 8, outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              {unlockError && (
+                <div style={{
+                  padding: '10px 12px', borderRadius: 8, background: '#FEF2F2',
+                  border: '1px solid #FCA5A5', color: '#B91C1C', fontSize: 12, lineHeight: 1.4,
+                }}>
+                  {unlockError}
+                </div>
+              )}
+            </div>
+            <div style={{
+              padding: '14px 22px', borderTop: '1px solid #F1F5F9',
+              display: 'flex', justifyContent: 'flex-end', gap: 8,
+            }}>
+              <button
+                type="button"
+                disabled={unlockLoading}
+                onClick={() => setUnlockModalItem(null)}
+                style={{
+                  padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#475569',
+                  background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={unlockLoading || unlockTokenInput.length !== 16}
+                onClick={async () => {
+                  if (!unlockModalItem) return;
+                  setUnlockLoading(true);
+                  setUnlockError(null);
+                  try {
+                    const res = await workflowApi.verifyUnlockToken(
+                      unlockModalItem.intakeId,
+                      unlockTokenInput,
+                    );
+                    const mapped = mapIntake(res.data);
+                    rememberUnlock(mapped.intakeId);
+                    setIntakeForm({ ...mapped, unlockTokenConsumed: true });
+                    markStageComplete('intake');
+                    setUnlockModalItem(null);
+                    setSuccess('Unlock JWT verified once — you can continue this intake journey without re-entering the token.');
+                    setTimeout(() => setSuccess(null), 5000);
+                    await loadQueue();
+                    setPage('ai');
+                  } catch (err: any) {
+                    const detail = err?.response?.data?.detail || err?.message || 'Token verification failed';
+                    setUnlockError(detail);
+                    if (String(detail).toLowerCase().includes('expired')) {
+                      await loadQueue();
+                    }
+                  } finally {
+                    setUnlockLoading(false);
+                  }
+                }}
+                style={{
+                  padding: '8px 16px', fontSize: 12, fontWeight: 700, color: '#FFFFFF',
+                  background: unlockTokenInput.length === 16 ? '#7C3AED' : '#C4B5FD',
+                  border: 'none', borderRadius: 8,
+                  cursor: unlockLoading || unlockTokenInput.length !== 16 ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                <i className="ti ti-lock-open" />
+                {unlockLoading ? 'Verifying…' : 'Verify & Start Journey'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

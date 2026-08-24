@@ -2,7 +2,7 @@
  * Tenant User portal (Platform Admin) — review/approve Tenant User profiles.
  * Invite Tenant User lives only in Tenant Admin Portal.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useAppStore } from '@/store/appStore';
 import { inviteApi } from '@/services/api';
 import { canApproveTenantUsers } from '@/lib/rbac';
@@ -23,6 +23,10 @@ function mapInvite(d: any): InvitedUser {
     jobTitle: d.jobTitle,
     functionArea: d.functionArea,
     invitedBy: d.invitedBy,
+    tenantAdmin: d.tenantAdmin ?? d.tenantAdminName ?? null,
+    tenantAdminName: d.tenantAdminName ?? d.tenantAdmin ?? null,
+    tenantAdminEmail: d.tenantAdminEmail ?? null,
+    tenantAdminId: d.tenantAdminId ?? null,
     invitedAt: d.invitedAt,
     status: d.status,
     summaryLine: d.summaryLine,
@@ -43,7 +47,14 @@ function mapInvite(d: any): InvitedUser {
 function formatDate(iso?: string | null) {
   if (!iso) return '—';
   try {
-    return new Date(iso).toLocaleString();
+    const d = new Date(iso);
+    // Compact: DD/MM/YY HH:mm
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yy = String(d.getFullYear()).slice(-2);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${dd}/${mm}/${yy} ${hh}:${mi}`;
   } catch {
     return iso;
   }
@@ -101,6 +112,18 @@ export default function TenantUserPortal() {
     setReviewInvite(full);
   };
 
+  const cellPad = '8px 8px';
+  const thStyle: CSSProperties = {
+    padding: cellPad,
+    textAlign: 'left',
+    whiteSpace: 'nowrap',
+    fontWeight: 700,
+  };
+  const tdBase: CSSProperties = {
+    padding: cellPad,
+    verticalAlign: 'middle',
+  };
+
   const renderTable = (rows: InvitedUser[], empty: string) => {
     if (rows.length === 0) {
       return (
@@ -114,23 +137,43 @@ export default function TenantUserPortal() {
     }
     return (
       <div style={{
-        background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12, overflow: 'hidden',
+        background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12,
+        overflowX: 'auto', width: '100%',
       }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <table style={{
+          width: '100%',
+          minWidth: 960,
+          borderCollapse: 'collapse',
+          fontSize: 12,
+          tableLayout: 'fixed',
+        }}>
+          <colgroup>
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '9%' }} />
+            <col style={{ width: '16%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '9%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '9%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '8%' }} />
+            <col style={{ width: '7%' }} />
+          </colgroup>
           <thead>
             <tr style={{
               background: '#F8FAFC', borderBottom: '1px solid #E2E8F0',
-              color: '#64748B', fontSize: 11, textTransform: 'uppercase',
+              color: '#64748B', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em',
             }}>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Tenant User ID</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Name</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Email</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Company</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Function</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Invited by</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Date</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Status</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left' }}>Action</th>
+              <th style={thStyle}>Tenant User ID</th>
+              <th style={thStyle}>Name</th>
+              <th style={thStyle}>Email</th>
+              <th style={thStyle}>Company</th>
+              <th style={thStyle}>Function</th>
+              <th style={thStyle}>tenant_Admin</th>
+              <th style={thStyle}>Invited by</th>
+              <th style={thStyle}>Date</th>
+              <th style={thStyle}>Status</th>
+              <th style={thStyle}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -143,49 +186,75 @@ export default function TenantUserPortal() {
                   background: label === 'PENDING' ? '#FFFBEB' : undefined,
                 }}>
                   <td style={{
-                    padding: '10px 14px', fontFamily: 'monospace', fontSize: 11,
-                    fontWeight: 600, color: '#2563EB',
-                  }}>
+                    ...tdBase, fontFamily: 'monospace', fontSize: 10,
+                    fontWeight: 600, color: '#2563EB', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }} title={u.inviteId}>
                     {u.inviteId}
                   </td>
-                  <td style={{ padding: '10px 14px', fontWeight: 600, color: '#0F172A' }}>{u.fullName}</td>
-                  <td style={{ padding: '10px 14px', color: '#475569' }}>{u.email}</td>
-                  <td style={{ padding: '10px 14px', color: '#475569' }}>{u.companyName || '—'}</td>
-                  <td style={{ padding: '10px 14px', color: '#334155' }}>{u.functionArea || '—'}</td>
-                  <td style={{ padding: '10px 14px', color: '#64748B', fontSize: 12 }}>{u.invitedBy || '—'}</td>
-                  <td style={{ padding: '10px 14px', color: '#64748B', fontSize: 12, whiteSpace: 'nowrap' }}>
+                  <td style={{
+                    ...tdBase, fontWeight: 600, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }} title={u.fullName}>
+                    {u.fullName}
+                  </td>
+                  <td style={{
+                    ...tdBase, color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }} title={u.email}>
+                    {u.email}
+                  </td>
+                  <td style={{
+                    ...tdBase, color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }} title={u.companyName || undefined}>
+                    {u.companyName || '—'}
+                  </td>
+                  <td style={{
+                    ...tdBase, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }} title={u.functionArea || undefined}>
+                    {u.functionArea || '—'}
+                  </td>
+                  <td style={{
+                    ...tdBase, fontWeight: 600, color: '#0F766E', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }} title={u.tenantAdminName || u.tenantAdmin || undefined}>
+                    {u.tenantAdminName || u.tenantAdmin || '—'}
+                  </td>
+                  <td style={{
+                    ...tdBase, color: '#64748B', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis',
+                  }} title={u.invitedBy || undefined}>
+                    {u.invitedBy || '—'}
+                  </td>
+                  <td style={{ ...tdBase, color: '#64748B', fontSize: 11, whiteSpace: 'nowrap' }}>
                     {formatDate(u.invitedAt)}
                   </td>
-                  <td style={{ padding: '10px 14px' }}>
+                  <td style={tdBase}>
                     <span style={{
-                      fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 999, ...style,
+                      fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 999, ...style,
                     }}>
                       {label}
                     </span>
                   </td>
-                  <td style={{ padding: '10px 14px' }}>
+                  <td style={{ ...tdBase, whiteSpace: 'nowrap' }}>
                     {canApprove && label === 'PENDING' ? (
                       <button
                         type="button"
                         onClick={() => openReview(u)}
+                        title="Review & approve"
                         style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 6,
-                          padding: '7px 14px', fontSize: 12, fontWeight: 700,
+                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                          padding: '5px 10px', fontSize: 11, fontWeight: 700,
                           color: '#FFFFFF', background: '#2563EB', border: 'none',
                           borderRadius: 999, cursor: 'pointer', whiteSpace: 'nowrap',
                         }}
                       >
-                        <i className="ti ti-shield-check" style={{ fontSize: 14 }} />
-                        Review &amp; approve
+                        <i className="ti ti-shield-check" style={{ fontSize: 13 }} />
+                        Review
                       </button>
                     ) : (
                       <button
                         type="button"
                         onClick={() => openReview(u)}
                         style={{
-                          padding: '5px 10px', fontSize: 11, fontWeight: 600, color: '#1D4ED8',
+                          padding: '4px 10px', fontSize: 11, fontWeight: 600, color: '#1D4ED8',
                           background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8,
-                          cursor: 'pointer',
+                          cursor: 'pointer', whiteSpace: 'nowrap',
                         }}
                       >
                         View
@@ -202,7 +271,7 @@ export default function TenantUserPortal() {
   };
 
   return (
-    <div style={{ maxWidth: 1180 }}>
+    <div style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
       {message && (
         <div style={{
           padding: '12px 16px', borderRadius: 8, marginBottom: 18, fontSize: 13,

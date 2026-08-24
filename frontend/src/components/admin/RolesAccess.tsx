@@ -31,7 +31,7 @@ const ROLE_SHORT: Record<PortalRole, { code: string; sub: string }> = {
 };
 
 /** Permission matrix — relevant GENTERA platform + tenant features (snapshot style). */
-const MATRIX: MatrixRow[] = [
+const DEFAULT_MATRIX: MatrixRow[] = [
   {
     feature: 'Create provider',
     endpoint: 'POST /api/v1/provider/create',
@@ -83,14 +83,19 @@ const MATRIX: MatrixRow[] = [
     roles: { 'Provider Admin': true, 'Provider User': false, 'Tenant Admin': true, 'Tenant User': false },
   },
   {
+    feature: 'Approve Project Intake Step 1 (Tenant Admin)',
+    endpoint: 'PATCH /api/v1/intake/{id}/approve (pending_tenant_approval)',
+    roles: { 'Provider Admin': false, 'Provider User': false, 'Tenant Admin': true, 'Tenant User': false },
+  },
+  {
+    feature: 'Approve Project Intake Step 2 — Unlock AI (Provider Admin)',
+    endpoint: 'PATCH /api/v1/intake/{id}/approve (pending_provider_approval)',
+    roles: { 'Provider Admin': true, 'Provider User': false, 'Tenant Admin': false, 'Tenant User': false },
+  },
+  {
     feature: 'Submit LLM Kit intake / stages',
     endpoint: 'POST /api/v1/intake/submit',
     roles: { 'Provider Admin': true, 'Provider User': false, 'Tenant Admin': true, 'Tenant User': true },
-  },
-  {
-    feature: 'Approve Project Intake (unlock AI / cost / TF)',
-    endpoint: 'PATCH /api/v1/intake/{id}/approve',
-    roles: { 'Provider Admin': true, 'Provider User': false, 'Tenant Admin': true, 'Tenant User': false },
   },
   {
     feature: 'OPTIMA-AI access',
@@ -114,6 +119,58 @@ const MATRIX: MatrixRow[] = [
   },
 ];
 
+const MATRIX_STORAGE_KEY = 'gentera_rbac_matrix_v1';
+
+function cloneMatrix(source: MatrixRow[] = DEFAULT_MATRIX): MatrixRow[] {
+  return source.map((row) => ({
+    feature: row.feature,
+    endpoint: row.endpoint,
+    roles: { ...row.roles },
+  }));
+}
+
+function loadMatrixFromStorage(): MatrixRow[] {
+  const base = cloneMatrix();
+  try {
+    const raw = localStorage.getItem(MATRIX_STORAGE_KEY);
+    if (!raw) return base;
+    const saved = JSON.parse(raw) as Array<{ feature: string; roles?: Partial<Record<PortalRole, Cell>> }>;
+    if (!Array.isArray(saved)) return base;
+    return base.map((row) => {
+      const match = saved.find((s) => s.feature === row.feature);
+      if (!match?.roles) return row;
+      const nextRoles = { ...row.roles };
+      for (const role of ROLE_ORDER) {
+        const v = match.roles[role];
+        if (v === true || v === false || v === 'own') nextRoles[role] = v;
+      }
+      return { ...row, roles: nextRoles };
+    });
+  } catch {
+    return base;
+  }
+}
+
+function persistMatrix(rows: MatrixRow[]) {
+  try {
+    localStorage.setItem(
+      MATRIX_STORAGE_KEY,
+      JSON.stringify(rows.map((r) => ({ feature: r.feature, roles: r.roles }))),
+    );
+  } catch { /* ignore quota */ }
+}
+
+function cycleCell(value: Cell): Cell {
+  if (value === true) return 'own';
+  if (value === 'own') return false;
+  return true;
+}
+
+function cellLabel(value: Cell) {
+  if (value === true) return 'Allowed';
+  if (value === 'own') return 'Own scope / read-only';
+  return 'Denied';
+}
 function mapInvite(d: any): InvitedUser {
   return {
     inviteId: d.inviteId,
@@ -191,25 +248,43 @@ function RoleCard({
   );
 }
 
-function MatrixCell({ value }: { value: Cell }) {
-  if (value === true) {
+function MatrixCell({
+  value,
+  editable,
+  onCycle,
+}: {
+  value: Cell;
+  editable?: boolean;
+  onCycle?: () => void;
+}) {
+  const icon = value === true
+    ? <i className="ti ti-square-rounded-check-filled" />
+    : value === 'own'
+      ? <i className="ti ti-circle-dot" />
+      : <i className="ti ti-lock" />;
+  const color = value === true ? '#059669' : value === 'own' ? '#EA580C' : '#94A3B8';
+
+  if (!editable || !onCycle) {
     return (
-      <span title="Allowed" style={{ color: '#059669', fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
-        <i className="ti ti-square-rounded-check-filled" />
+      <span title={cellLabel(value)} style={{ color, fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
+        {icon}
       </span>
     );
   }
-  if (value === 'own') {
-    return (
-      <span title="Own scope / read-only" style={{ color: '#EA580C', fontSize: 15, fontWeight: 700, lineHeight: 1 }}>
-        <i className="ti ti-circle-dot" />
-      </span>
-    );
-  }
+
   return (
-    <span title="Denied" style={{ color: '#94A3B8', fontSize: 15, lineHeight: 1 }}>
-      <i className="ti ti-lock" />
-    </span>
+    <button
+      type="button"
+      onClick={onCycle}
+      title={`Click to change · now: ${cellLabel(value)} (Allowed → Own → Denied)`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 34, height: 34, borderRadius: 8, cursor: 'pointer',
+        border: '1.5px dashed #A78BFA', background: '#FAF5FF', color, fontSize: 16, fontWeight: 700,
+      }}
+    >
+      {icon}
+    </button>
   );
 }
 
@@ -315,6 +390,11 @@ export default function RolesAccess() {
   } = useAppStore();
   const activeMeta = ROLE_META[currentRole as PortalRole] ?? ROLE_META['Provider Admin'];
   const [loading, setLoading] = useState(false);
+  const canEditMatrix = currentRole === 'Provider Admin';
+  const [matrix, setMatrix] = useState<MatrixRow[]>(() => loadMatrixFromStorage());
+  const [editingFeature, setEditingFeature] = useState<string | null>(null);
+  const [draftRoles, setDraftRoles] = useState<Record<PortalRole, Cell> | null>(null);
+  const [matrixMsg, setMatrixMsg] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -323,6 +403,47 @@ export default function RolesAccess() {
       .catch(() => { /* keep store */ })
       .finally(() => setLoading(false));
   }, [setInvitedUsers]);
+
+  const startEditRow = (row: MatrixRow) => {
+    if (!canEditMatrix) return;
+    setEditingFeature(row.feature);
+    setDraftRoles({ ...row.roles });
+    setMatrixMsg(null);
+  };
+
+  const cancelEditRow = () => {
+    setEditingFeature(null);
+    setDraftRoles(null);
+  };
+
+  const saveEditRow = () => {
+    if (!canEditMatrix || !editingFeature || !draftRoles) return;
+    const next = matrix.map((row) => (
+      row.feature === editingFeature ? { ...row, roles: { ...draftRoles } } : row
+    ));
+    setMatrix(next);
+    persistMatrix(next);
+    setEditingFeature(null);
+    setDraftRoles(null);
+    setMatrixMsg(`Saved permissions for “${editingFeature}”.`);
+    setTimeout(() => setMatrixMsg(null), 3500);
+  };
+
+  const cycleDraftRole = (role: PortalRole) => {
+    if (!draftRoles) return;
+    setDraftRoles({ ...draftRoles, [role]: cycleCell(draftRoles[role]) });
+  };
+
+  const resetMatrixDefaults = () => {
+    if (!canEditMatrix) return;
+    const next = cloneMatrix();
+    setMatrix(next);
+    persistMatrix(next);
+    setEditingFeature(null);
+    setDraftRoles(null);
+    setMatrixMsg('Permission matrix restored to platform defaults.');
+    setTimeout(() => setMatrixMsg(null), 3500);
+  };
 
   const activeProviderUsers = (invitedUsers || []).filter(
     (u) => u.role === 'PROVIDER_USER' && !u.archived && !u.decommissioned && Boolean(u.intakeData),
@@ -511,16 +632,48 @@ export default function RolesAccess() {
       </div>
 
       {/* 2. Permission matrix */}
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#64748B', marginBottom: 10, textTransform: 'uppercase' }}>
-        <i className="ti ti-table" style={{ marginRight: 6 }} />
-        2. Permission matrix
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+        marginBottom: 10, flexWrap: 'wrap',
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#64748B', textTransform: 'uppercase' }}>
+          <i className="ti ti-table" style={{ marginRight: 6 }} />
+          2. Permission matrix
+        </div>
+        {canEditMatrix ? (
+          <button
+            type="button"
+            onClick={resetMatrixDefaults}
+            disabled={Boolean(editingFeature)}
+            style={{
+              fontSize: 11, fontWeight: 600, color: '#7C3AED', background: '#FAF5FF',
+              border: '1px solid #DDD6FE', borderRadius: 999, padding: '6px 12px',
+              cursor: editingFeature ? 'not-allowed' : 'pointer', opacity: editingFeature ? 0.55 : 1,
+            }}
+          >
+            <i className="ti ti-restore" style={{ marginRight: 4 }} />
+            Reset defaults
+          </button>
+        ) : null}
       </div>
 
       <div style={{
         marginBottom: 10, padding: '10px 14px', borderRadius: 10,
-        background: '#EFF6FF', border: '1px solid #BFDBFE', fontSize: 12, color: '#1E40AF',
+        background: canEditMatrix ? '#FAF5FF' : '#EFF6FF',
+        border: `1px solid ${canEditMatrix ? '#DDD6FE' : '#BFDBFE'}`,
+        fontSize: 12, color: canEditMatrix ? '#5B21B6' : '#1E40AF',
       }}>
-        Your current role (<strong>{currentRole}</strong>) column is highlighted.
+        {canEditMatrix ? (
+          <>
+            <strong>Provider Admin:</strong> use <strong>Edit</strong> on any feature row, click role icons to cycle{' '}
+            <em>Allowed → Own scope → Denied</em>, then <strong>Save</strong>. Changes persist in this browser.
+          </>
+        ) : (
+          <>
+            Your current role (<strong>{currentRole}</strong>) can view the matrix.
+            Only <strong>Provider Admin</strong> can edit allow / deny permissions.
+          </>
+        )}
         <span style={{ marginLeft: 12 }}>
           <i className="ti ti-square-rounded-check-filled" style={{ color: '#059669' }} /> allowed
         </span>
@@ -532,11 +685,20 @@ export default function RolesAccess() {
         </span>
       </div>
 
+      {matrixMsg && (
+        <div style={{
+          marginBottom: 10, padding: '10px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+          background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#047857',
+        }}>
+          {matrixMsg}
+        </div>
+      )}
+
       <div style={{
         background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12, overflow: 'auto',
         marginBottom: 22, boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
       }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 860 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 980 }}>
           <thead>
             <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
               <th style={{
@@ -563,36 +725,106 @@ export default function RolesAccess() {
                   </th>
                 );
               })}
+              <th style={{
+                textAlign: 'center', padding: '12px 10px', minWidth: 120,
+                color: '#64748B', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em',
+              }}>
+                Edit
+              </th>
             </tr>
           </thead>
           <tbody>
-            {MATRIX.map((row, i) => (
-              <tr key={row.feature} style={{ borderBottom: i === MATRIX.length - 1 ? 'none' : '1px solid #F1F5F9' }}>
-                <td style={{ padding: '12px 14px' }}>
-                  <div style={{ fontWeight: 700, color: '#0F172A' }}>{row.feature}</div>
-                  <div style={{
-                    fontSize: 10, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                    color: '#64748B', marginTop: 3, wordBreak: 'break-all',
-                  }}>
-                    {row.endpoint}
-                  </div>
-                </td>
-                {ROLE_ORDER.map((r) => {
-                  const active = r === currentRole;
-                  return (
-                    <td
-                      key={r}
-                      style={{
-                        padding: '12px 10px', textAlign: 'center',
-                        background: active ? `${ROLE_META[r].color}0A` : undefined,
-                      }}
-                    >
-                      <MatrixCell value={row.roles[r]} />
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+            {matrix.map((row, i) => {
+              const isEditing = editingFeature === row.feature;
+              const roles = isEditing && draftRoles ? draftRoles : row.roles;
+              return (
+                <tr
+                  key={row.feature}
+                  style={{
+                    borderBottom: i === matrix.length - 1 ? 'none' : '1px solid #F1F5F9',
+                    background: isEditing ? '#FAF5FF' : undefined,
+                  }}
+                >
+                  <td style={{ padding: '12px 14px' }}>
+                    <div style={{ fontWeight: 700, color: '#0F172A' }}>{row.feature}</div>
+                    <div style={{
+                      fontSize: 10, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                      color: '#64748B', marginTop: 3, wordBreak: 'break-all',
+                    }}>
+                      {row.endpoint}
+                    </div>
+                  </td>
+                  {ROLE_ORDER.map((r) => {
+                    const active = r === currentRole;
+                    return (
+                      <td
+                        key={r}
+                        style={{
+                          padding: '12px 10px', textAlign: 'center',
+                          background: isEditing
+                            ? '#F3E8FF'
+                            : active ? `${ROLE_META[r].color}0A` : undefined,
+                        }}
+                      >
+                        <MatrixCell
+                          value={roles[r]}
+                          editable={isEditing}
+                          onCycle={() => cycleDraftRole(r)}
+                        />
+                      </td>
+                    );
+                  })}
+                  <td style={{ padding: '10px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    {canEditMatrix ? (
+                      isEditing ? (
+                        <div style={{ display: 'inline-flex', gap: 6 }}>
+                          <button
+                            type="button"
+                            onClick={saveEditRow}
+                            style={{
+                              fontSize: 11, fontWeight: 700, color: '#FFFFFF', background: '#7C3AED',
+                              border: 'none', borderRadius: 8, padding: '6px 10px', cursor: 'pointer',
+                            }}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditRow}
+                            style={{
+                              fontSize: 11, fontWeight: 600, color: '#475569', background: '#F1F5F9',
+                              border: '1px solid #E2E8F0', borderRadius: 8, padding: '6px 10px', cursor: 'pointer',
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => startEditRow(row)}
+                          disabled={Boolean(editingFeature) && !isEditing}
+                          style={{
+                            fontSize: 11, fontWeight: 700, color: '#7C3AED', background: '#FAF5FF',
+                            border: '1px solid #DDD6FE', borderRadius: 8, padding: '6px 12px',
+                            cursor: editingFeature ? 'not-allowed' : 'pointer',
+                            opacity: editingFeature ? 0.45 : 1,
+                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                          }}
+                        >
+                          <i className="ti ti-pencil" style={{ fontSize: 13 }} />
+                          Edit
+                        </button>
+                      )
+                    ) : (
+                      <span style={{ fontSize: 10, color: '#94A3B8', fontWeight: 600 }} title="Only Provider Admin can edit">
+                        <i className="ti ti-lock" /> View only
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

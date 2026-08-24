@@ -26,6 +26,13 @@ class IntakeForm(Base):
     approved_by: Mapped[str] = mapped_column(String(200), nullable=True)
     approved_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     review_notes: Mapped[str] = mapped_column(Text, nullable=True)
+    # 16-character alphanumeric unlock JWT issued on Provider Admin Step-2 approve (5-minute TTL)
+    unlock_token: Mapped[str] = mapped_column(String(16), nullable=True)
+    unlock_token_expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    unlock_token_consumed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    # Tenant User applicant this intake was raised for / by
+    tenant_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tenant_user_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     submitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="intake_forms")

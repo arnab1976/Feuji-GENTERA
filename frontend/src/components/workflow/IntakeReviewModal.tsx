@@ -1,3 +1,10 @@
+/**
+ * Review/edit Project Intake and apply the correct 2-factor approval step.
+ * Status drives the actor — never call Provider Admin approve on pending_tenant_approval.
+ *
+ * Step 1 pending_tenant_approval  → Tenant Admin → pending_provider_approval (AI still locked)
+ * Step 2 pending_provider_approval → Provider Admin → queued_for_recommendation (AI unlocked)
+ */
 import { useState, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import type { IntakeForm } from '@/types';
@@ -23,16 +30,59 @@ const inputStyle: CSSProperties = {
   boxSizing: 'border-box',
 };
 
+function resolveStep(status?: string): {
+  actor: 'Tenant Admin' | 'Provider Admin';
+  step: 1 | 2 | null;
+  approveLabel: string;
+  accent: string;
+  hint: string;
+} {
+  if (status === 'pending_tenant_approval') {
+    return {
+      actor: 'Tenant Admin',
+      step: 1,
+      approveLabel: 'Approve → Forward to Provider Admin',
+      accent: '#0D9488',
+      hint: 'Step 1 of 2 — Tenant Admin can approve now (no wait). After this, Provider Admin Level Sign-Off is still required. AI Engine stays locked.',
+    };
+  }
+  if (status === 'pending_provider_approval') {
+    return {
+      actor: 'Provider Admin',
+      step: 2,
+      approveLabel: 'Approve → Unlock AI Engine',
+      accent: '#7C3AED',
+      hint: 'Step 2 of 2 — Tenant Admin already approved. Provider Admin Level Sign-Off unlocks AI / cost / Terraform for Tenant User.',
+    };
+  }
+  return {
+    actor: 'Provider Admin',
+    step: null,
+    approveLabel: 'Approve',
+    accent: '#94A3B8',
+    hint: `Intake status is "${status || 'unknown'}" — no approval action available.`,
+  };
+}
+
 export default function IntakeReviewModal({
   open,
   intake,
-  actorRole,
+  actorRole: _actorRoleProp,
+  approvalGate = 'auto',
   onClose,
   onSuccess,
 }: {
   open: boolean;
   intake: IntakeForm | null;
-  actorRole: 'Tenant Admin' | 'Provider Admin';
+  /** Hint only — effective actor is derived from intake.status for strict 2-factor RBAC */
+  actorRole?: 'Tenant Admin' | 'Provider Admin';
+  /**
+   * Page gate so both approvals are not offered on the same screen:
+   * - tenant: Step 1 only; after TA approve show status + go to Provider Admin portal
+   * - provider: Step 2 Unlock AI only; Step 1 must be done elsewhere
+   * - auto: status-driven (legacy)
+   */
+  approvalGate?: 'tenant' | 'provider' | 'auto';
   onClose: () => void;
   onSuccess: (msg: string) => void;
 }) {
@@ -63,15 +113,32 @@ export default function IntakeReviewModal({
 
   if (!open || !intake) return null;
 
+  const stepInfo = resolveStep(intake.status);
+  const gateBlocksStep2 = approvalGate === 'tenant' && intake.status === 'pending_provider_approval';
+  const gateBlocksStep1 = approvalGate === 'provider' && intake.status === 'pending_tenant_approval';
+  const canDecide = stepInfo.step !== null && !gateBlocksStep2 && !gateBlocksStep1;
+
   const handleDecision = async (decision: 'approve' | 'reject') => {
+    if (gateBlocksStep2) {
+      setError("It's require Provider Admin level approval. Open the Provider Admin portal — both approvals cannot be done on this page.");
+      return;
+    }
+    if (gateBlocksStep1) {
+      setError('Tenant Admin must approve first on the Tenant Admin page. Provider Admin Unlock AI is Step 2 only.');
+      return;
+    }
+    if (!canDecide) {
+      setError(stepInfo.hint);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       await workflowApi.decideIntake(intake.intakeId, {
         decision,
         notes: notes.trim(),
-        actor_role: actorRole,
-        actor_name: actorRole,
+        actor_role: stepInfo.actor,
+        actor_name: stepInfo.actor,
         project_name: projectName.trim(),
         cloud,
         app_category: appCategory,
@@ -82,12 +149,12 @@ export default function IntakeReviewModal({
       });
 
       if (decision === 'approve') {
-        const nextMsg = actorRole === 'Tenant Admin'
-          ? `Intake ${intake.intakeId} approved by Tenant Admin! Forwarded to Provider Admin portal.`
-          : `Intake ${intake.intakeId} approved by Provider Admin! Stage 2 AI Recommendation unlocked.`;
+        const nextMsg = stepInfo.step === 1
+          ? `Intake ${intake.intakeId} approved by Tenant Admin (Step 1/2). Forwarded for Provider Admin Level Sign-Off — AI Engine stays locked until Step 2.`
+          : `Intake ${intake.intakeId} approved by Provider Admin (Step 2/2). AI Recommendation unlocked for Tenant User.`;
         onSuccess(nextMsg);
       } else {
-        onSuccess(`Intake ${intake.intakeId} rejected.`);
+        onSuccess(`Intake ${intake.intakeId} rejected by ${stepInfo.actor}.`);
       }
       onClose();
     } catch (err: any) {
@@ -123,7 +190,7 @@ export default function IntakeReviewModal({
           <p style={{ margin: '6px 0 0', fontSize: 12, color: '#64748B' }}>
             Submitted by <strong>{intake.submittedByRole || intake.submittedBy}</strong> under tenant{' '}
             <strong>{intake.tenantName || intake.tenantId}</strong>.
-            You can review, make adjustments if needed, and approve or reject.
+            {' '}Current status: <strong>{intake.status}</strong>
           </p>
           <button
             type="button"
@@ -139,6 +206,36 @@ export default function IntakeReviewModal({
         </div>
 
         <div style={{ padding: '18px 22px', display: 'grid', gap: 14 }}>
+          {gateBlocksStep2 ? (
+            <div style={{
+              fontSize: 12, lineHeight: 1.5, color: '#92400E', background: '#FFFBEB',
+              border: '1px solid #FDE68A', borderRadius: 8, padding: '10px 12px',
+            }}>
+              <strong>Approved by Tenant Admin.</strong>
+              {' '}It&apos;s require Provider Admin level approval.
+              Both approvals cannot be done on this page — close this form and open the{' '}
+              <strong>Provider Admin</strong> portal to Unlock AI Engine.
+            </div>
+          ) : gateBlocksStep1 ? (
+            <div style={{
+              fontSize: 12, lineHeight: 1.5, color: '#92400E', background: '#FFFBEB',
+              border: '1px solid #FDE68A', borderRadius: 8, padding: '10px 12px',
+            }}>
+              Waiting for Tenant Admin Step 1. Provider Admin Unlock AI is only available after
+              Tenant Admin approval — that step is done on the Tenant Admin page, not here.
+            </div>
+          ) : (
+            <div style={{
+              fontSize: 12, lineHeight: 1.45, color: stepInfo.step === 1 ? '#0F766E' : '#5B21B6',
+              background: stepInfo.step === 1 ? '#F0FDFA' : '#F5F3FF',
+              border: `1px solid ${stepInfo.step === 1 ? '#99F6E4' : '#DDD6FE'}`,
+              borderRadius: 8, padding: '10px 12px',
+            }}>
+              <strong>{stepInfo.step ? `2-factor Step ${stepInfo.step}/2 — ${stepInfo.actor}` : 'No active approval step'}</strong>
+              <div style={{ marginTop: 4 }}>{stepInfo.hint}</div>
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Project Name</label>
@@ -208,7 +305,11 @@ export default function IntakeReviewModal({
               style={{ ...inputStyle, background: '#FFFFFF' }}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. Approved with adjustments. Forwarded for Provider sign-off."
+              placeholder={
+                stepInfo.step === 1
+                  ? 'e.g. Approved with adjustments. Forwarded for Provider sign-off.'
+                  : 'e.g. Provider sign-off complete. Unlock AI Engine.'
+              }
             />
           </div>
 
@@ -227,28 +328,38 @@ export default function IntakeReviewModal({
           >
             Cancel
           </button>
+          {!gateBlocksStep2 && (
+            <button
+              type="button"
+              disabled={loading || !canDecide}
+              onClick={() => handleDecision('reject')}
+              style={{
+                padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#BE123C', background: '#FFFFFF',
+                border: '1px solid #FECDD3', borderRadius: 8,
+                cursor: loading || !canDecide ? 'not-allowed' : 'pointer',
+                opacity: canDecide ? 1 : 0.5,
+              }}
+            >
+              <i className="ti ti-x" style={{ marginRight: 4 }} />
+              Reject
+            </button>
+          )}
           <button
             type="button"
-            disabled={loading}
-            onClick={() => handleDecision('reject')}
-            style={{ padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#BE123C', background: '#FFFFFF', border: '1px solid #FECDD3', borderRadius: 8, cursor: loading ? 'wait' : 'pointer' }}
-          >
-            <i className="ti ti-x" style={{ marginRight: 4 }} />
-            Reject
-          </button>
-          <button
-            type="button"
-            disabled={loading}
+            disabled={loading || !canDecide || gateBlocksStep2}
             onClick={() => handleDecision('approve')}
+            title={gateBlocksStep2 ? 'Go to Provider Admin portal for Step 2' : undefined}
             style={{
-              padding: '8px 18px', fontSize: 12, fontWeight: 700, color: '#FFFFFF',
-              background: actorRole === 'Tenant Admin' ? '#0D9488' : '#7C3AED',
-              border: 'none', borderRadius: 8, cursor: loading ? 'wait' : 'pointer',
+              padding: '8px 18px', fontSize: 12, fontWeight: 700,
+              color: gateBlocksStep2 ? '#047857' : '#FFFFFF',
+              background: gateBlocksStep2 ? '#D1FAE5' : (canDecide ? stepInfo.accent : '#94A3B8'),
+              border: gateBlocksStep2 ? '1px solid #A7F3D0' : 'none', borderRadius: 8,
+              cursor: loading || !canDecide || gateBlocksStep2 ? 'not-allowed' : 'pointer',
               display: 'inline-flex', alignItems: 'center', gap: 6,
             }}
           >
-            <i className="ti ti-check" />
-            {actorRole === 'Tenant Admin' ? 'Approve & Forward to Provider Admin' : 'Approve → Unlock AI Engine'}
+            <i className={gateBlocksStep2 ? 'ti ti-circle-check' : 'ti ti-check'} />
+            {loading ? 'Processing…' : (gateBlocksStep2 ? 'Approved by Tenant Admin' : stepInfo.approveLabel)}
           </button>
         </div>
       </div>

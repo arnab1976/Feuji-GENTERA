@@ -192,7 +192,7 @@ resource "aws_db_instance" "postgres" {
   instance_class         = "db.m5.xlarge"
   db_name                = "appdb"
   username               = "dbadmin"
-  password               = "ProtectedSecret!2026"
+  manage_master_user_password = true
   db_subnet_group_name   = aws_db_subnet_group.rds.name
   publicly_accessible    = false
   storage_encrypted      = true
@@ -211,7 +211,146 @@ resource "aws_eks_cluster" "eks" {
 }
 `;
 
+const GCP_MAIN_TF = `# Feuji GENTERA — Stage 4 Terraform HCL Blueprint for GCP
+# Tenant: TENANT_BL2WST | Env: Production | Compliance: HIPAA
+
+provider "google" {
+  project = var.gcp_project_id
+  region  = var.gcp_region
+}
+
+resource "google_compute_network" "vpc" {
+  name                    = join("-", ["vpc", var.tenant_id, var.environment])
+  auto_create_subnetworks = false
+}
+
+resource "google_compute_subnetwork" "private" {
+  name          = join("-", ["subnet-private", var.tenant_id])
+  ip_cidr_range = "10.0.1.0/24"
+  region        = var.gcp_region
+  network       = google_compute_network.vpc.id
+  private_ip_google_access = true
+}
+
+resource "google_sql_database_instance" "postgres" {
+  name             = join("-", ["psql", var.tenant_id])
+  database_version = "POSTGRES_15"
+  region           = var.gcp_region
+
+  settings {
+    tier = "db-custom-4-16384"
+    ip_configuration {
+      ipv4_enabled    = false
+      private_network = google_compute_network.vpc.id
+    }
+    backup_configuration {
+      enabled = true
+    }
+    user_labels = local.mandatory_tags
+  }
+}
+
+resource "google_container_cluster" "gke" {
+  name     = join("-", ["gke", var.tenant_id])
+  location = var.gcp_region
+
+  network    = google_compute_network.vpc.name
+  subnetwork = google_compute_subnetwork.private.name
+
+  enable_autopilot = true
+  resource_labels  = local.mandatory_tags
+}
+
+resource "google_secret_manager_secret" "app" {
+  secret_id = join("-", ["secret", var.tenant_id])
+  replication {
+    auto {}
+  }
+  labels = local.mandatory_tags
+}
+`;
+
+const GCP_VARS_TF = `variable "tenant_id" {
+  type        = string
+  description = "Tenant identifier used in resource naming"
+}
+
+variable "environment" {
+  type        = string
+  default     = "prod"
+  description = "Deployment environment scope (prod | uat | dev)"
+}
+
+variable "gcp_region" {
+  type        = string
+  default     = "us-central1"
+  description = "Primary GCP region"
+}
+
+variable "gcp_project_id" {
+  type        = string
+  description = "GCP project ID for authentication"
+}
+
+locals {
+  mandatory_tags = {
+    environment = var.environment
+    managed_by  = "feuji-gentera"
+    compliance  = "hipaa"
+    tenant      = var.tenant_id
+  }
+}
+`;
+
+const GCP_OUTPUTS_TF = `output "cloudsql_connection_name" {
+  value       = google_sql_database_instance.postgres.connection_name
+  description = "Cloud SQL connection name"
+}
+
+output "gke_cluster_name" {
+  value       = google_container_cluster.gke.name
+  description = "GKE Autopilot cluster name"
+}
+
+output "vpc_name" {
+  value       = google_compute_network.vpc.name
+  description = "VPC network name"
+}
+
+output "vertex_region" {
+  value       = var.gcp_region
+  description = "Region for Vertex AI Gemini endpoints"
+}
+`;
+
+const GCP_PROVIDERS_TF = `terraform {
+  required_version = ">= 1.5.0"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.30.0"
+    }
+  }
+  backend "gcs" {
+    bucket = "feuji-gentera-tfstate"
+    prefix = "tenants/tenant_bl2wst/terraform"
+  }
+}
+`;
+
 type FileTab = 'main.tf' | 'variables.tf' | 'outputs.tf' | 'providers.tf';
+
+/** Native tooltips — what each Terraform root module file does */
+const FILE_TAB_TOOLTIPS: Record<FileTab, string> = {
+  'main.tf':
+    'Terraform root module: declares the cloud resources to create (VPC/VNet, GKE/AKS/EKS, databases, secrets, etc.) and how they connect. Terraform applies this plan to build real infrastructure.',
+  'variables.tf':
+    'Input parameters for the module (region, environment, tenant ID, sizes, tags). Callers supply values via .tfvars or -var; keeps main.tf reusable and avoids hard-coded secrets.',
+  'outputs.tf':
+    'Values exported after apply (FQDNs, cluster names, endpoints, resource IDs). Other modules or CI/CD can consume these outputs without digging into resource internals.',
+  'providers.tf':
+    'Provider & backend config: which cloud API Terraform talks to (azurerm/aws/google), required versions, authentication hooks, and often the remote state backend. Must be set before resources in main.tf can run.',
+};
 
 export default function TerraformGeneration() {
   const {
@@ -223,10 +362,13 @@ export default function TerraformGeneration() {
   } = useAppStore();
 
   const tenantId = intakeForm?.tenantId || 'TENANT_BL2WST';
-  const initialCloud = (intakeForm?.cloud || 'azure').toLowerCase() === 'aws' ? 'AWS' : 'Azure';
+  const intakeCloud = (intakeForm?.cloud || 'azure').toLowerCase();
+  const initialCloud = intakeCloud === 'aws' ? 'AWS' : intakeCloud === 'gcp' ? 'GCP' : 'Azure';
 
-  const [cloud, setCloud] = useState<'Azure' | 'AWS'>(initialCloud as any);
-  const [region, setRegion] = useState(cloud === 'AWS' ? 'us-east-1' : 'eastus2');
+  const [cloud, setCloud] = useState<'Azure' | 'AWS' | 'GCP'>(initialCloud as 'Azure' | 'AWS' | 'GCP');
+  const [region, setRegion] = useState(
+    cloud === 'AWS' ? 'us-east-1' : cloud === 'GCP' ? 'us-central1' : 'eastus2',
+  );
   const [environment, setEnvironment] = useState('Production');
   const [activeTab, setActiveTab] = useState<FileTab>('main.tf');
 
@@ -241,6 +383,17 @@ export default function TerraformGeneration() {
     'providers.tf': '',
   });
 
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanResult, setScanResult] = useState<{
+    overall: string;
+    summary: string;
+    cloud?: string;
+    validation?: { valid: boolean; errors: string[]; output?: string };
+    opa?: { clean: boolean; violations: string[] };
+    tfsec?: { passed: boolean; status: string; findings: { rule: string; severity: string; message: string }[]; violation_count: number };
+  } | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const codeEndRef = useRef<HTMLDivElement>(null);
 
@@ -251,6 +404,14 @@ export default function TerraformGeneration() {
         'variables.tf': AZURE_VARS_TF.replace(/Azure/g, 'AWS'),
         'outputs.tf': AZURE_OUTPUTS_TF,
         'providers.tf': AZURE_PROVIDERS_TF.replace(/azurerm/g, 'aws'),
+      };
+    }
+    if (cloud === 'GCP') {
+      return {
+        'main.tf': GCP_MAIN_TF,
+        'variables.tf': GCP_VARS_TF,
+        'outputs.tf': GCP_OUTPUTS_TF,
+        'providers.tf': GCP_PROVIDERS_TF,
       };
     }
     return {
@@ -343,16 +504,61 @@ export default function TerraformGeneration() {
     };
   }, [cloud, startStreaming]);
 
+  // While HCL is streaming, keep the code panel and page window following the latest lines
   useEffect(() => {
-    if (codeEndRef.current) {
-      codeEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    const end = codeEndRef.current;
+    if (!end) return;
+    const panel = end.parentElement;
+    if (panel && typeof panel.scrollTop === 'number') {
+      panel.scrollTop = panel.scrollHeight;
     }
-  }, [streamedCode]);
+    if (isStreaming) {
+      end.scrollIntoView({ behavior: 'smooth', block: 'end', inline: 'nearest' });
+    }
+  }, [streamedCode, isStreaming]);
 
   const handleProceed = () => {
     markStageComplete('terraform');
     setPage('jumpbox');
   };
+
+  const runComplianceScan = async () => {
+    if (isStreaming || scanBusy) return;
+    setScanBusy(true);
+    setScanError(null);
+    const files = {
+      'main.tf': streamedCode['main.tf'] || fileContents['main.tf'],
+      'variables.tf': streamedCode['variables.tf'] || fileContents['variables.tf'],
+      'outputs.tf': streamedCode['outputs.tf'] || fileContents['outputs.tf'],
+      'providers.tf': streamedCode['providers.tf'] || fileContents['providers.tf'],
+    };
+    try {
+      const res = await workflowApi.validateTF({
+        cloud: cloud.toLowerCase() === 'gcp' ? 'gcp' : cloud.toLowerCase() === 'aws' ? 'aws' : 'azure',
+        region,
+        environment: environment.toLowerCase(),
+        files,
+      });
+      const data = res.data;
+      setScanResult(data);
+      setTerraformArtifact({
+        artifactId: `ART-SCAN-${Date.now()}`,
+        s3Key: `tenants/${tenantId}/artifacts/terraform-blueprint.zip`,
+        files: ['main.tf', 'variables.tf', 'outputs.tf', 'providers.tf'],
+        validationStatus: data?.validation?.valid ? 'PASSED' : 'FAILED',
+        opaScan: data?.opa?.clean ? 'CLEAN' : 'VIOLATIONS',
+        tfsec: data?.tfsec?.status || (data?.overall === 'PASSED' ? 'PASSED' : 'FAILED'),
+      });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message || 'Validation request failed';
+      setScanError(String(detail));
+      setScanResult(null);
+    } finally {
+      setScanBusy(false);
+    }
+  };
+
+  const overallPassed = scanResult?.overall === 'PASSED';
 
   const pipelineSteps = [
     { label: 'Resource plan', icon: 'ti-check', step: 1 },
@@ -479,6 +685,7 @@ export default function TerraformGeneration() {
           >
             <option value="Azure">Azure</option>
             <option value="AWS">AWS</option>
+            <option value="GCP">GCP</option>
           </select>
         </div>
 
@@ -498,6 +705,7 @@ export default function TerraformGeneration() {
             <option value="eastus2">eastus2</option>
             <option value="us-east-1">us-east-1</option>
             <option value="us-west-2">us-west-2</option>
+            <option value="us-central1">us-central1</option>
             <option value="westeurope">westeurope</option>
           </select>
         </div>
@@ -555,12 +763,14 @@ export default function TerraformGeneration() {
                 <button
                   key={tab}
                   type="button"
+                  title={FILE_TAB_TOOLTIPS[tab]}
+                  aria-label={`${tab}: ${FILE_TAB_TOOLTIPS[tab]}`}
                   onClick={() => setActiveTab(tab)}
                   style={{
                     padding: '10px 14px', fontSize: 12, fontWeight: active ? 700 : 500,
                     color: active ? '#F8FAFC' : '#94A3B8', background: active ? '#090D16' : 'transparent',
                     border: 'none', borderBottom: active ? '2px solid #2563EB' : '2px solid transparent',
-                    cursor: 'pointer', fontFamily: 'monospace',
+                    cursor: 'help', fontFamily: 'monospace',
                   }}
                 >
                   {tab}
@@ -636,17 +846,152 @@ export default function TerraformGeneration() {
 
         <button
           type="button"
-          onClick={() => alert('OPA + tfsec compliance scan PASSED (0 security violations).')}
+          onClick={() => void runComplianceScan()}
+          disabled={isStreaming || scanBusy}
           style={{
-            fontSize: 13, fontWeight: 600, color: '#334155',
-            background: '#FFFFFF', border: '1px solid #CBD5E1', borderRadius: 10, padding: '14px 20px',
-            cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8,
+            fontSize: 13, fontWeight: 600, color: '#FFFFFF',
+            background: isStreaming || scanBusy ? '#94A3B8' : '#2563EB',
+            border: 'none', borderRadius: 10, padding: '14px 20px',
+            cursor: isStreaming || scanBusy ? 'not-allowed' : 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            boxShadow: isStreaming || scanBusy ? 'none' : '0 2px 8px rgba(37,99,235,0.25)',
           }}
         >
-          <i className="ti ti-shield-check" style={{ fontSize: 16 }} />
-          <span>Validate Syntax (OPA + tfsec)</span>
+          <i className={`ti ${scanBusy ? 'ti-loader spin' : 'ti-shield-check'}`} style={{ fontSize: 16 }} />
+          <span>{scanBusy ? 'Scanning OPA + tfsec…' : 'Validate Syntax (OPA + tfsec)'}</span>
         </button>
       </div>
+
+      {(scanResult || scanError) && (
+        <div style={{
+          background: '#FFFFFF',
+          border: `1px solid ${scanError ? '#FCA5A5' : overallPassed ? '#A7F3D0' : '#FCD34D'}`,
+          borderRadius: 14, padding: '16px 18px',
+          boxShadow: '0 4px 14px rgba(15,23,42,0.06)',
+        }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+            marginBottom: 10,
+          }}>
+            <div style={{
+              fontSize: 14, fontWeight: 700,
+              color: scanError ? '#B91C1C' : overallPassed ? '#047857' : '#B45309',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <i className={`ti ${scanError ? 'ti-alert-circle' : overallPassed ? 'ti-circle-check' : 'ti-alert-triangle'}`} />
+              {scanError ? 'Validation request failed' : (scanResult?.summary || 'Scan complete')}
+            </div>
+            <button
+              type="button"
+              onClick={() => { setScanResult(null); setScanError(null); }}
+              style={{
+                fontSize: 11, fontWeight: 600, color: '#64748B', background: '#F8FAFC',
+                border: '1px solid #E2E8F0', borderRadius: 8, padding: '5px 10px', cursor: 'pointer',
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+
+          {scanError && (
+            <div style={{ fontSize: 12, color: '#B91C1C', lineHeight: 1.45 }}>{scanError}</div>
+          )}
+
+          {scanResult && (
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {[
+                  {
+                    label: 'terraform validate',
+                    ok: Boolean(scanResult.validation?.valid),
+                    detail: scanResult.validation?.valid
+                      ? 'HCL structure OK'
+                      : `${scanResult.validation?.errors?.length || 0} error(s)`,
+                  },
+                  {
+                    label: 'OPA / Rego',
+                    ok: Boolean(scanResult.opa?.clean),
+                    detail: scanResult.opa?.clean
+                      ? 'CLEAN'
+                      : `${scanResult.opa?.violations?.length || 0} violation(s)`,
+                  },
+                  {
+                    label: 'tfsec',
+                    ok: Boolean(scanResult.tfsec?.passed),
+                    detail: scanResult.tfsec?.passed
+                      ? 'PASSED'
+                      : `${scanResult.tfsec?.violation_count || 0} finding(s)`,
+                  },
+                ].map((chip) => (
+                  <span
+                    key={chip.label}
+                    style={{
+                      fontSize: 11, fontWeight: 700, padding: '5px 10px', borderRadius: 999,
+                      background: chip.ok ? '#ECFDF5' : '#FFFBEB',
+                      color: chip.ok ? '#047857' : '#B45309',
+                      border: `1px solid ${chip.ok ? '#A7F3D0' : '#FDE68A'}`,
+                    }}
+                  >
+                    {chip.label}: {chip.detail}
+                  </span>
+                ))}
+              </div>
+
+              {(scanResult.validation?.errors?.length || 0) > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', marginBottom: 4, textTransform: 'uppercase' }}>
+                    Syntax errors
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#B91C1C', lineHeight: 1.5 }}>
+                    {scanResult.validation!.errors.map((e) => <li key={e}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {(scanResult.opa?.violations?.length || 0) > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', marginBottom: 4, textTransform: 'uppercase' }}>
+                    OPA violations
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#B45309', lineHeight: 1.5 }}>
+                    {scanResult.opa!.violations.map((e) => <li key={e}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {(scanResult.tfsec?.findings?.length || 0) > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', marginBottom: 4, textTransform: 'uppercase' }}>
+                    tfsec findings
+                  </div>
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    {scanResult.tfsec!.findings.map((f) => (
+                      <div
+                        key={`${f.rule}-${f.message}`}
+                        style={{
+                          fontSize: 12, color: '#334155', background: '#FFFBEB',
+                          border: '1px solid #FDE68A', borderRadius: 8, padding: '8px 10px', lineHeight: 1.4,
+                        }}
+                      >
+                        <strong style={{ color: '#B45309' }}>[{f.severity}]</strong>{' '}
+                        <code style={{ fontSize: 11 }}>{f.rule}</code>
+                        <div style={{ marginTop: 3 }}>{f.message}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {overallPassed && (
+                <div style={{ fontSize: 12, color: '#047857', fontWeight: 600 }}>
+                  Cloud <strong>{(scanResult.cloud || cloud).toUpperCase()}</strong> blueprint cleared
+                  syntax + OPA + tfsec. Safe to proceed to Execution Engine.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

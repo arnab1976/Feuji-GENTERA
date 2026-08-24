@@ -21,6 +21,70 @@ def _role_label(role: str) -> str:
     }.get(role, role.replace("_", " ").title())
 
 
+_ROLE_LABELS = {"Provider Admin", "Provider User", "Tenant Admin", "Tenant User"}
+
+
+async def _tenant_admin_indexes(db: AsyncSession):
+    """Map tenant_id / company → Tenant Admin invitation for ownership lookup."""
+    result = await db.execute(
+        select(UserInvitation).where(
+            UserInvitation.role == "TENANT_ADMIN",
+            UserInvitation.archived.is_(False),
+            UserInvitation.decommissioned.is_(False),
+        )
+    )
+    admins = result.scalars().all()
+    by_tenant: dict[str, UserInvitation] = {}
+    by_company: dict[str, UserInvitation] = {}
+    for admin in admins:
+        if admin.tenant_id:
+            existing = by_tenant.get(admin.tenant_id)
+            if not existing or admin.status == "ACCEPTED":
+                by_tenant[admin.tenant_id] = admin
+        key = (admin.company_name or "").strip().lower()
+        if key:
+            existing = by_company.get(key)
+            if not existing or admin.status == "ACCEPTED":
+                by_company[key] = admin
+    return by_tenant, by_company
+
+
+def _enrich_invite_dict(
+    invite: UserInvitation,
+    by_tenant: dict[str, UserInvitation],
+    by_company: dict[str, UserInvitation],
+) -> dict:
+    """Attach tenantAdmin* fields so Tenant User → Tenant Admin ownership is visible."""
+    data = invite.to_dict()
+    if invite.role != "TENANT_USER":
+        return data
+
+    admin = None
+    if invite.tenant_id and invite.tenant_id in by_tenant:
+        admin = by_tenant[invite.tenant_id]
+    if not admin:
+        key = (invite.company_name or "").strip().lower()
+        admin = by_company.get(key)
+
+    intake = invite.intake_data if isinstance(invite.intake_data, dict) else {}
+    invited_by = (invite.invited_by or "").strip()
+    name_from_invite = invited_by if invited_by and invited_by not in _ROLE_LABELS else None
+
+    name = (
+        (admin.full_name if admin else None)
+        or (intake.get("tenant_admin_name") if isinstance(intake.get("tenant_admin_name"), str) else None)
+        or name_from_invite
+    )
+    email = (admin.email if admin else None) or intake.get("tenant_admin_email")
+    admin_id = (admin.id if admin else None) or intake.get("tenant_admin_invite_id")
+
+    data["tenantAdmin"] = name
+    data["tenantAdminName"] = name
+    data["tenantAdminEmail"] = email
+    data["tenantAdminId"] = admin_id
+    return data
+
+
 class InviteCreate(BaseModel):
     full_name: str
     email: EmailStr
@@ -43,6 +107,10 @@ class InviteCreate(BaseModel):
     compliance: str | None = None
     description: str | None = None
     tenant_id: str | None = None
+    # Owning Tenant Admin identity (stored on TENANT_USER intake)
+    tenant_admin_name: str | None = None
+    tenant_admin_email: str | None = None
+    tenant_admin_invite_id: str | None = None
 
     @field_validator("email")
     @classmethod
@@ -203,6 +271,9 @@ async def create_invite(payload: InviteCreate, db: AsyncSession = Depends(get_db
             "contribution": (payload.contribution or payload.description or "").strip(),
             "invited_by": payload.invited_by or "Tenant Admin",
             "tenant_id": tenant_id,
+            "tenant_admin_name": (payload.tenant_admin_name or "").strip() or None,
+            "tenant_admin_email": (payload.tenant_admin_email or "").strip() or None,
+            "tenant_admin_invite_id": (payload.tenant_admin_invite_id or "").strip() or None,
         }
         if payload.department:
             invite.department = payload.department.strip()
@@ -241,8 +312,9 @@ async def create_invite(payload: InviteCreate, db: AsyncSession = Depends(get_db
     await db.commit()
     await db.refresh(invite)
 
+    by_tenant, by_company = await _tenant_admin_indexes(db)
     return {
-        **invite.to_dict(),
+        **_enrich_invite_dict(invite, by_tenant, by_company),
         "tenant": tenant_dict,
         "resolvedProviderId": provider_id,
     }
@@ -254,7 +326,8 @@ async def list_invites(db: AsyncSession = Depends(get_db)):
         select(UserInvitation).order_by(UserInvitation.created_at.desc())
     )
     invites = result.scalars().all()
-    return [i.to_dict() for i in invites]
+    by_tenant, by_company = await _tenant_admin_indexes(db)
+    return [_enrich_invite_dict(i, by_tenant, by_company) for i in invites]
 
 
 @router.get("/invites/tenant-companies")
@@ -464,7 +537,8 @@ async def get_invite(invite_id: str, db: AsyncSession = Depends(get_db)):
         tenant = await db.get(Tenant, invite.tenant_id)
         if tenant:
             tenant_dict = tenant.to_dict()
-    return {**invite.to_dict(), "tenant": tenant_dict}
+    by_tenant, by_company = await _tenant_admin_indexes(db)
+    return {**_enrich_invite_dict(invite, by_tenant, by_company), "tenant": tenant_dict}
 
 
 @router.patch("/invite/{invite_id}/delete")

@@ -3,6 +3,7 @@
  * Renders the layout (Topbar + Sidebar + Content) and routes
  * to the correct page component based on currentPage in the store.
  * Hides the left sidebar on the GENTERA home page for a full-width landing layout.
+ * Sidebar appears after "Start GENTERA Journey" (and on all non-home pages).
  * Includes a safety ErrorBoundary to catch and recover from any UI runtime exceptions.
  */
 import React from 'react';

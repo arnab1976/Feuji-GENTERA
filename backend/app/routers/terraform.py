@@ -13,10 +13,18 @@ router = APIRouter()
 class TerraformGenRequest(BaseModel):
     plan_id: str
     tenant_id: str
-    cloud: str    # azure | aws
+    cloud: str    # azure | aws | gcp
     region: str = "eastus2"
     environment: str = "prod"
     stream: bool = True
+
+
+class TerraformValidateRequest(BaseModel):
+    cloud: str = "azure"
+    region: str = "eastus2"
+    environment: str = "prod"
+    files: dict[str, str]
+
 
 @router.post("/terraform/generate")
 async def generate_terraform(payload: TerraformGenRequest, db: AsyncSession = Depends(get_db)):
@@ -25,7 +33,7 @@ async def generate_terraform(payload: TerraformGenRequest, db: AsyncSession = De
     - main.tf: infrastructure blueprint
     - variables.tf: input parameter declarations
     - outputs.tf: connection details (feeds into outputs.json for RAG app + Phase 2 OPTIMA-AI)
-    - providers.tf: cloud provider auth (IRSA for AWS, Workload Identity for Azure)
+    - providers.tf: cloud provider auth (IRSA for AWS, Workload Identity for Azure, WI for GCP)
     OPA, tfsec, and Checkov scans applied after generation.
     NFR: generation < 30 seconds.
     """
@@ -43,8 +51,7 @@ async def generate_terraform(payload: TerraformGenRequest, db: AsyncSession = De
         return StreamingResponse(tf_stream(), media_type="text/event-stream")
 
     hcl_files = await engine.generate_hcl(plan, payload.tenant_id)
-    validation = await engine.validate(hcl_files)
-    opa_result = await engine.opa_scan(hcl_files, plan.resources)
+    scan = await engine.full_compliance_scan(hcl_files, plan.resources)
     s3_key = f"tenants/{payload.tenant_id}/artifacts/{payload.plan_id}.zip"
     # In production: upload to S3/Blob here
 
@@ -55,9 +62,9 @@ async def generate_terraform(payload: TerraformGenRequest, db: AsyncSession = De
         variables_tf=hcl_files.get("variables.tf", ""),
         outputs_tf=hcl_files.get("outputs.tf", ""),
         providers_tf=hcl_files.get("providers.tf", ""),
-        validation_status="PASSED" if validation["valid"] else "FAILED",
-        opa_scan_status="CLEAN" if opa_result["clean"] else "VIOLATIONS",
-        tfsec_status="PASSED",
+        validation_status="PASSED" if scan["validation"]["valid"] else "FAILED",
+        opa_scan_status="CLEAN" if scan["opa"]["clean"] else "VIOLATIONS",
+        tfsec_status=scan["tfsec"]["status"],
     )
     db.add(artifact)
     await db.commit()
@@ -68,7 +75,21 @@ async def generate_terraform(payload: TerraformGenRequest, db: AsyncSession = De
         "validationStatus": artifact.validation_status,
         "opaScan": artifact.opa_scan_status,
         "tfsec": artifact.tfsec_status,
+        "scan": scan,
     }
+
+
+@router.post("/terraform/validate")
+async def validate_terraform(payload: TerraformValidateRequest):
+    """
+    Run terraform-style syntax validation + OPA + tfsec against posted HCL files.
+    Offline — no cloud credentials required.
+    """
+    if not payload.files:
+        raise HTTPException(status_code=400, detail="files map is required (main.tf, variables.tf, outputs.tf, providers.tf)")
+    engine = TerraformEngine(cloud=payload.cloud, region=payload.region, env=payload.environment)
+    return await engine.full_compliance_scan(payload.files)
+
 
 @router.get("/terraform/artifact/{artifact_id}")
 async def get_artifact(artifact_id: str, db: AsyncSession = Depends(get_db)):
@@ -84,4 +105,6 @@ async def get_artifact(artifact_id: str, db: AsyncSession = Depends(get_db)):
             "providers.tf": artifact.providers_tf,
         },
         "validationStatus": artifact.validation_status,
+        "opaScan": artifact.opa_scan_status,
+        "tfsec": artifact.tfsec_status,
     }

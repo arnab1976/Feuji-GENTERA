@@ -80,6 +80,26 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE intake_forms ADD COLUMN IF NOT EXISTS review_notes TEXT NULL"
         ))
+        await conn.execute(text(
+            "ALTER TABLE intake_forms ADD COLUMN IF NOT EXISTS unlock_token VARCHAR(16) NULL"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE intake_forms ADD COLUMN IF NOT EXISTS unlock_token_expires_at TIMESTAMP NULL"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE intake_forms ADD COLUMN IF NOT EXISTS unlock_token_consumed_at TIMESTAMP NULL"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE intake_forms ADD COLUMN IF NOT EXISTS tenant_user_id VARCHAR(32) NULL"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE intake_forms ADD COLUMN IF NOT EXISTS tenant_user_name VARCHAR(200) NULL"
+        ))
+        # Extend tenant primary_cloud enum with GCP (Postgres 15+)
+        try:
+            await conn.execute(text("ALTER TYPE cloud_enum ADD VALUE IF NOT EXISTS 'gcp'"))
+        except Exception:
+            pass
 
 
 async def get_db():
