@@ -25,6 +25,14 @@ const PHASE2_STEPS = [
   'Savings Dashboard — track realized vs. budgeted savings',
 ];
 
+const PHASE3_STEPS = [
+  'Neon.tech PostgreSQL — pgvector AI database setup',
+  'Upstash Redis — serverless Celery broker & cache',
+  'Render.com Backend — FastAPI containerized web service',
+  'Vercel Frontend — Vite React SPA edge distribution',
+  'Environment Matrix — DATABASE_URL & REDIS_URL binding',
+];
+
 const EXPERTISE = [
   { value: '<1hr', label: 'Environment Deploy' },
   { value: '40–50%', label: 'Faster Provisioning' },
@@ -660,30 +668,55 @@ export default function HomePage() {
           Standardize, provision, govern, and scale production-ready LLM and RAG ecosystems across hybrid and multi-cloud environments.
         </p>
 
-        <button
-          type="button"
-          onClick={() => setPage('provider')}
-          style={{
-            marginTop: 10,
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: '0.04em',
-            color: '#FFFFFF',
-            background: 'linear-gradient(135deg, #0D9488 0%, #0284C7 100%)',
-            padding: '9px 18px',
-            borderRadius: 10,
-            border: 'none',
-            cursor: 'pointer',
-            boxShadow: '0 0 22px rgba(13, 148, 136, 0.4)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            textTransform: 'uppercase',
-          }}
-        >
-          <i className="ti ti-rocket" style={{ fontSize: 14 }} />
-          Start GENTERA Journey
-        </button>
+        <div style={{ display: 'inline-flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+          <button
+            type="button"
+            onClick={() => setPage('provider')}
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: '0.04em',
+              color: '#FFFFFF',
+              background: 'linear-gradient(135deg, #0D9488 0%, #0284C7 100%)',
+              padding: '9px 18px',
+              borderRadius: 10,
+              border: 'none',
+              cursor: 'pointer',
+              boxShadow: '0 0 22px rgba(13, 148, 136, 0.4)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              textTransform: 'uppercase',
+            }}
+          >
+            <i className="ti ti-rocket" style={{ fontSize: 14 }} />
+            Start GENTERA Journey
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setPage('phase3-architecture')}
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: '0.04em',
+              color: '#FFFFFF',
+              background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+              padding: '9px 18px',
+              borderRadius: 10,
+              border: 'none',
+              cursor: 'pointer',
+              boxShadow: '0 0 22px rgba(16, 185, 129, 0.4)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              textTransform: 'uppercase',
+            }}
+          >
+            <i className="ti ti-cloud-computing" style={{ fontSize: 14 }} />
+            Phase 3: Cloud Architecture
+          </button>
+        </div>
 
         {/* Four application expertise highlights */}
         <div

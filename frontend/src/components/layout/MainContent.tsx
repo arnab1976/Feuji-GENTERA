@@ -40,6 +40,9 @@ import Recommendations from '@/components/optima/Recommendations';
 import ApprovalWorkflow from '@/components/optima/ApprovalWorkflow';
 import SavingsDashboard from '@/components/optima/SavingsDashboard';
 
+// ── Phase 3 Cloud Architecture screen ───────────────────────────────────────
+import CloudArchitecturePortal from '@/components/cloud/CloudArchitecturePortal';
+
 const PAGE_META: Record<PageId, { tag: string; tagColor: string; tagBg: string; title: string; desc: string; isOptima?: boolean }> = {
   home:            { tag:'GENTERA Landing Hub',   tagColor:'#0D9488', tagBg:'#CCFBF1', title:'GENTERA Home Overview',       desc:'GenAI Terraform Enterprise Resource Automation' },
   provider:        { tag:'Platform Admin',        tagColor:'#7C3AED', tagBg:'#EDE9FE', title:'Provider Admin',              desc:'Register provider organisations and manage the default PROVIDER_ADMIN user. Use Open TA Intake Forms for project intake review.' },
@@ -65,6 +68,7 @@ const PAGE_META: Record<PageId, { tag: string; tagColor: string; tagBg: string; 
   'optima-recs':      { tag:'OPTIMA-AI Step 2',  tagColor:'#0EA5E9', tagBg:'#E0F2FE', title:'AI Cost Recommendations',   desc:'Optimization recommendations generated for the exact resources provisioned in Phase 1. Each references an actual resource from outputs.json. Nothing auto-applied.', isOptima: true },
   'optima-approval':  { tag:'OPTIMA-AI Step 3',  tagColor:'#0EA5E9', tagBg:'#E0F2FE', title:'Approval Workflow',         desc:'Every recommendation requires approval. Approved changes execute through the Phase 1 Terraform pipeline — same OPA, tfsec, and compliance controls.', isOptima: true },
   'optima-savings':   { tag:'OPTIMA-AI Step 4',  tagColor:'#0EA5E9', tagBg:'#E0F2FE', title:'Savings Dashboard',         desc:'Tracks savings from Approval Workflow decisions against Phase 1 Stage 3 approved cost baseline and the Intake Form budget ceiling.', isOptima: true },
+  'phase3-architecture': { tag:'Phase 3 Architecture', tagColor:'#0D9488', tagBg:'#F0FDFA', title:'Phase 3 — Cloud Architecture & Deployment Guide', desc:'Interactive Serverless Multi-Tenant Control Plane Topology, Free Tool Capabilities, Inter-Service Connection Matrix & Deployment Blueprint.' },
 };
 
 const PAGE_COMPONENTS: Record<PageId, React.ComponentType> = {
@@ -77,6 +81,7 @@ const PAGE_COMPONENTS: Record<PageId, React.ComponentType> = {
   'optima-overview': FinOpsOverview,  'optima-scan': CostBreakdown,
   'optima-recs': Recommendations,  'optima-approval': ApprovalWorkflow,
   'optima-savings': SavingsDashboard,
+  'phase3-architecture': CloudArchitecturePortal,
 };
 
 export default function MainContent() {

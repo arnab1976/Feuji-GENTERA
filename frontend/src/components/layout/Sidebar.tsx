@@ -46,6 +46,10 @@ const OPTIMA_ITEMS: NavItem[] = [
   { id: 'optima-savings',   icon: 'ti-trending-down',    label: 'Savings Dashboard', phase2: true },
 ];
 
+const PHASE3_ITEMS: NavItem[] = [
+  { id: 'phase3-architecture', icon: 'ti-cloud-computing', label: 'Cloud Architecture & Deployment', phase2: true },
+];
+
 export default function Sidebar() {
   const { currentPage, setPage, completedStages, currentRole } = useAppStore();
   const stageList = ['intake','ai','cost','terraform','jumpbox','health','audit','testing','launch'];
@@ -68,7 +72,7 @@ export default function Sidebar() {
           padding: '8px 10px', borderRadius: 8, cursor: 'pointer',
           marginBottom: 2, transition: '0.15s',
           borderLeft: isActive
-            ? `2px solid ${isOptima ? '#0EA5E9' : '#0D9488'}`
+            ? `2px solid ${item.id === 'phase3-architecture' ? '#10B981' : isOptima ? '#0EA5E9' : '#0D9488'}`
             : '2px solid transparent',
           background: isActive ? '#1E293B' : 'transparent',
         }}
@@ -78,7 +82,7 @@ export default function Sidebar() {
         <i className={`ti ${isDone ? 'ti-check' : item.icon}`}
           style={{
             fontSize: 16, width: 20, textAlign: 'center', flexShrink: 0,
-            color: isActive ? (isOptima ? '#0EA5E9' : '#fff')
+            color: isActive ? (item.id === 'phase3-architecture' ? '#10B981' : isOptima ? '#0EA5E9' : '#fff')
               : isDone ? '#059669'
               : isOptima ? '#0891B2'
               : '#94A3B8',
@@ -172,6 +176,29 @@ export default function Sidebar() {
           </div>
         </>
       )}
+
+      {/* Phase 3 — Cloud Architecture & Deployment */}
+      <div style={{
+        height: 1, margin: '8px 12px',
+        background: 'linear-gradient(to right, transparent, #10B981, transparent)',
+      }} />
+      <div style={{ padding: '14px 12px 16px' }}>
+        <div style={{
+          fontSize: 10, fontWeight: 600, color: '#10B981', textTransform: 'uppercase',
+          letterSpacing: '0.1em', padding: '0 6px', marginBottom: 4,
+          display: 'flex', alignItems: 'center', gap: 5,
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%', background: '#10B981',
+            display: 'inline-block',
+          }} />
+          Phase 3 — Cloud Architecture
+        </div>
+        <div style={{ fontSize: 10, color: '#64748B', padding: '0 6px 6px', lineHeight: 1.45 }}>
+          Multi-Tenant Serverless Deployment & Free Tools Blueprint
+        </div>
+        {PHASE3_ITEMS.map(navItem)}
+      </div>
 
       {!showAdmin && !showTenantAdminPortal && !showWorkflow && !showOptima && (
         <div style={{ padding: 16, fontSize: 12, color: '#94A3B8' }}>

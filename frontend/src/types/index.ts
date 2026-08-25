@@ -268,4 +268,5 @@ export type PageId =
   | 'intake' | 'ai' | 'cost' | 'terraform' | 'jumpbox'
   | 'health' | 'audit' | 'testing' | 'launch'
   | 'optima-overview' | 'optima-scan' | 'optima-recs'
-  | 'optima-approval' | 'optima-savings';
+  | 'optima-approval' | 'optima-savings'
+  | 'phase3-architecture';
