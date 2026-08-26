@@ -24,15 +24,15 @@ async def lifespan(app: FastAPI):
         if host in ("localhost", "127.0.0.1", "postgres"):
             print(
                 "[feuji] WARNING: DATABASE_URL points at a local Docker host. "
-                "On Render set Environment → DATABASE_URL to your Neon connection string."
+                "On Render set Environment -> DATABASE_URL to your Neon connection string."
             )
         await init_db()
         print(f"[feuji] Database ready (host={host})")
     except Exception as e:
         print(f"Warning: Database initialization skipped ({e}). Running in API standalone mode.")
         print(
-            "[feuji] Fix: Render Dashboard → Environment → set DATABASE_URL to Neon "
-            "(postgresql://...@....neon.tech/...?sslmode=require). Then Manual Deploy → Clear build cache & deploy."
+            "[feuji] Fix: Render Dashboard -> Environment -> set DATABASE_URL to Neon "
+            "(postgresql://...@....neon.tech/...?sslmode=require). Then Manual Deploy -> Clear build cache & deploy."
         )
     yield
     # Shutdown — cleanup if needed
