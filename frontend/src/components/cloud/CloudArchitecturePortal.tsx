@@ -234,7 +234,7 @@ export default function CloudArchitecturePortal() {
         </div>
 
         <h1 style={{ fontSize: 26, fontWeight: 800, margin: '0 0 8px', letterSpacing: '-0.02em' }}>
-          Phase 3 — Cloud Architecture & Deployment Guide
+          Phase 3 — Free Tier Cloud Architecture & Deployment Guide
         </h1>
         <p style={{ fontSize: 13, color: '#CBD5E1', maxWidth: 840, lineHeight: 1.6, margin: 0 }}>
           Comprehensive architecture blueprint, tool integration matrix, inter-service connection topology,

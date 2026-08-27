@@ -269,4 +269,4 @@ export type PageId =
   | 'health' | 'audit' | 'testing' | 'launch'
   | 'optima-overview' | 'optima-scan' | 'optima-recs'
   | 'optima-approval' | 'optima-savings'
-  | 'phase3-architecture';
+  | 'phase3-architecture' | 'phase3-azure';

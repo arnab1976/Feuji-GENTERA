@@ -47,7 +47,8 @@ const OPTIMA_ITEMS: NavItem[] = [
 ];
 
 const PHASE3_ITEMS: NavItem[] = [
-  { id: 'phase3-architecture', icon: 'ti-cloud-computing', label: 'Cloud Architecture & Deployment', phase2: true },
+  { id: 'phase3-architecture', icon: 'ti-cloud-computing', label: 'Free Tier Cloud Architecture', phase2: true },
+  { id: 'phase3-azure',        icon: 'ti-brand-azure',      label: 'Azure Architecture & Deploy', phase2: true },
 ];
 
 export default function Sidebar() {
